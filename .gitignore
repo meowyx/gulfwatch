@@ -1,0 +1,11 @@
+# Rust
+/target
+
+# Node (teammate's web folder)
+web/node_modules
+web/.next
+web/.env.local
+
+# General
+.env
+.DS_Store
