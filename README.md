@@ -12,9 +12,9 @@ Real-time observability and alerting for Solana programs. Streams live transacti
 
 ```
 crates/
-  gulfwatch-core/       # shared types and config
-  gulfwatch-ingest/     # gRPC client, transaction parsing
-  gulfwatch-server/     # axum server (REST + WebSocket + Prometheus)
-  gulfwatch-tui/        # terminal UI
+  gulfwatch-core/       # shared types and config 
+  gulfwatch-ingest/     # gRPC client, transaction parsing -WIP
+  gulfwatch-server/     # axum server (REST + WebSocket + Prometheus) - WIP
+  gulfwatch-tui/        # terminal UI - WIP
 web/                    # Next.js dashboard
 ```
