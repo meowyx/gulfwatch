@@ -1,6 +1,20 @@
 # GulfWatch
 
-Real-time observability and alerting for Solana programs. Streams live transaction data, computes metrics, fires alerts, and presents everything through a terminal TUI and REST API.
+Real-time security monitoring and alerting for Solana programs. Streams live transaction data from the chain, detects exploit patterns, fires alerts, and presents everything through a terminal TUI and REST API.
+
+Protocol teams find out they've been hacked from Twitter. GulfWatch tells them first.
+
+## The Problem
+
+Solana has seen massive protocol exploits -- Wormhole ($320M), Mango Markets ($114M), Crema ($8.8M). Every one of them had visible on-chain footprints before the damage was done. But there's no real-time security monitoring product for Solana programs. Teams either build janky custom scripts on webhooks or find out something's wrong from crypto Twitter.
+
+## What It Does
+
+- Streams live transactions for any Solana program via WebSocket RPC
+- Computes rolling window metrics (error rate, tx volume, compute units, instruction breakdown)
+- Fires configurable alerts when thresholds are breached (error rate spikes, tx volume anomalies)
+- Delivers alerts via WebSocket, TUI, and webhooks
+- Exports Prometheus-compatible metrics for Grafana integration
 
 ## Structure
 
@@ -9,7 +23,7 @@ crates/
   gulfwatch-core/       # shared types, rolling window, metrics, alerts, pipeline
   gulfwatch-ingest/     # Solana WebSocket RPC client, transaction parsing
   gulfwatch-server/     # axum REST API + WebSocket + Prometheus (binary)
-  gulfwatch-tui/        # terminal dashboard (binary)
+  gulfwatch-tui/        # terminal dashboard (binary, standalone)
 web/                    # Next.js dashboard (frontend)
 ```
 
@@ -40,7 +54,7 @@ MONITOR_PROGRAM=TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
 
 ### TUI (terminal dashboard)
 
-Self-contained — connects directly to Solana, no server needed.
+Self-contained -- connects directly to Solana, no server needed.
 
 ```bash
 cargo run -p gulfwatch-tui
@@ -107,3 +121,32 @@ Client sends:    { "subscribe": ["program_id"] }
 Server sends:    { "type": "transaction", "data": { ... } }
                  { "type": "alert", "data": { ... } }
 ```
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Solana WebSocket RPC] --> B[WebSocket Client\nlogsSubscribe + getTransaction]
+    B --> C[tokio::mpsc channel]
+    C --> D[Processing Worker]
+    D --> E[Rolling Window Buffer]
+    D --> F[Alert Engine]
+    D --> G[tokio::broadcast channel]
+    E --> H[Prometheus /metrics]
+    F --> I[Webhook Delivery]
+    F --> G
+    G --> J[WebSocket Server\naxum]
+    G --> K[TUI\nratatui]
+    J --> L[Web Dashboard]
+```
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `SOLANA_WS_URL` | Yes | Solana WebSocket RPC endpoint |
+| `SOLANA_RPC_URL` | Yes | Solana HTTP RPC endpoint |
+| `MONITOR_PROGRAM` | Yes | Program ID to monitor |
+| `MONITOR_PROGRAMS` | No | Comma-separated program IDs (server only) |
+| `LISTEN_ADDR` | No | Server listen address (default: `0.0.0.0:3001`) |
+
