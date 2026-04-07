@@ -1,7 +1,11 @@
+pub mod alert;
 pub mod metrics;
+pub mod pipeline;
 pub mod rolling_window;
 pub mod transaction;
 
+pub use alert::{AlertEngine, AlertEvent, AlertRule};
 pub use metrics::{InstructionCount, MetricSummary};
+pub use pipeline::AppState;
 pub use rolling_window::RollingWindow;
 pub use transaction::Transaction;

@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use chrono::{Duration, Utc};
 
-use crate::metrics::{InstructionCount, MetricSummary};
+use crate::metrics::{InstructionCount, MetricSummary, TimeBucket};
 use crate::transaction::Transaction;
 
 #[derive(Debug)]
@@ -80,6 +80,51 @@ impl RollingWindow {
             avg_compute_units,
             top_instructions,
         }
+    }
+
+    /// Bucket transactions by time interval and compute per-bucket metrics.
+    /// Returns buckets sorted oldest-first.
+    pub fn timeseries(&self, bucket_secs: i64) -> Vec<TimeBucket> {
+        if self.transactions.is_empty() {
+            return vec![];
+        }
+
+        let mut buckets: HashMap<i64, Vec<&Transaction>> = HashMap::new();
+
+        for tx in &self.transactions {
+            let key = tx.timestamp.timestamp() / bucket_secs * bucket_secs;
+            buckets.entry(key).or_default().push(tx);
+        }
+
+        let mut result: Vec<TimeBucket> = buckets
+            .into_iter()
+            .map(|(ts, txs)| {
+                let tx_count = txs.len() as u64;
+                let error_count = txs.iter().filter(|t| !t.success).count() as u64;
+                let error_rate = if tx_count > 0 {
+                    error_count as f64 / tx_count as f64
+                } else {
+                    0.0
+                };
+                let avg_compute_units = if tx_count > 0 {
+                    txs.iter().map(|t| t.compute_units as f64).sum::<f64>() / tx_count as f64
+                } else {
+                    0.0
+                };
+
+                TimeBucket {
+                    timestamp: chrono::DateTime::from_timestamp(ts, 0)
+                        .unwrap_or_else(|| Utc::now()),
+                    tx_count,
+                    error_count,
+                    error_rate,
+                    avg_compute_units,
+                }
+            })
+            .collect();
+
+        result.sort_by_key(|b| b.timestamp);
+        result
     }
 
     pub fn recent(&self, limit: usize) -> Vec<Transaction> {

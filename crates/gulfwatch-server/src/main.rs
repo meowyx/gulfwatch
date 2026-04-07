@@ -1,0 +1,97 @@
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use gulfwatch_core::alert::AlertEngine;
+use gulfwatch_core::pipeline::{WorkerHandle, run_processing_worker};
+use gulfwatch_core::AppState;
+use gulfwatch_ingest::{SolanaIngestClient, client::IngestConfig};
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() {
+    // Load .env before anything else
+    load_dotenv();
+
+    // Initialize structured logging
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    info!("Starting GulfWatch");
+
+    let ws_url = require_env("SOLANA_WS_URL");
+    let rpc_url = require_env("SOLANA_RPC_URL");
+    let listen_addr: SocketAddr = std::env::var("LISTEN_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:3001".to_string())
+        .parse()
+        .expect("invalid LISTEN_ADDR");
+
+    let (state, ingest_rx) = AppState::new(1024, 10);
+
+    let programs_str = std::env::var("MONITOR_PROGRAMS")
+        .or_else(|_| std::env::var("MONITOR_PROGRAM"))
+        .expect("Set MONITOR_PROGRAM or MONITOR_PROGRAMS in .env");
+    for pid in programs_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        state.add_program(pid.clone()).await;
+        info!(program_id = %pid, "Monitoring program");
+    }
+
+    let monitored = state.monitored_programs.read().await.clone();
+    let ingest_config = IngestConfig {
+        ws_url,
+        rpc_url,
+        program_ids: monitored,
+        max_backoff_secs: 60,
+    };
+
+    let ingest_client = SolanaIngestClient::new(ingest_config, state.ingest_tx.clone());
+    let worker_handle = WorkerHandle::from(&state);
+
+    tokio::spawn(run_processing_worker(worker_handle, ingest_rx));
+    tokio::spawn(async move { ingest_client.run().await });
+
+    let mut alert_engine = AlertEngine::new(
+        state.alert_rules.clone(),
+        state.windows.clone(),
+        state.alert_broadcast.clone(),
+        30,
+    );
+    tokio::spawn(async move { alert_engine.run(Duration::from_secs(5)).await });
+
+    info!("GulfWatch ready");
+    gulfwatch_server::run_server(state, listen_addr).await;
+}
+
+fn require_env(key: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| panic!("{key} not set — add it to .env"))
+}
+
+fn load_dotenv() {
+    let mut dir = std::env::current_dir().ok();
+    while let Some(d) = dir {
+        let env_file = d.join(".env");
+        if env_file.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&env_file) {
+                for line in contents.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    if let Some((key, value)) = line.split_once('=') {
+                        let key = key.trim();
+                        let value = value.trim().trim_matches('"').trim_matches('\'');
+                        if std::env::var(key).is_err() {
+                            // SAFETY: called before any threads are spawned
+                            unsafe { std::env::set_var(key, value); }
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        dir = d.parent().map(|p| p.to_path_buf());
+    }
+}
