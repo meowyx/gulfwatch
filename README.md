@@ -2,7 +2,7 @@
 
 Real-time security monitoring and alerting for Solana programs. Streams live transaction data from the chain, detects exploit patterns, fires alerts, and presents everything through a terminal TUI and REST API.
 
-Protocol teams find out they've been hacked from Twitter. GulfWatch tells them first.
+Protocol teams find out they've been compromised from Socials or dms but GulfWatch tells  the anomalities first.
 
 ## The Problem
 
@@ -11,13 +11,17 @@ Solana has seen massive protocol exploits -- Wormhole ($320M), Mango Markets ($1
 ## What It Does
 
 - Streams live transactions for any Solana program via WebSocket RPC
-- **Runs three security detections** on every transaction:
-  - **Authority Change**: fires on SPL Token `SetAuthority` or BPF Loader `Upgrade` (the loudest red flags in the Solana exploit playbook)
-  - **Failed Transaction Cluster**: fires when a signer produces a burst of failures followed by a success (the classic attacker-probe-then-land pattern that preceded Wormhole, Mango, and several Curve exploits)
-  - **Large Transfer Anomaly**: fires when a token transfer above a configurable threshold leaves a watched vault account (the "drain in progress" signal)
+- Runs three security detections on every transaction:
+
+| Detection | Triggers on | Signal |
+|---|---|---|
+| **Authority Change** | SPL Token `SetAuthority` or BPF Loader `Upgrade` | Loudest red flag in the exploit playbook |
+| **Failed Tx Cluster** | Signer produces a burst of failures then lands a success | The probe-then-land pattern that preceded Wormhole, Mango, and several Curve exploits |
+| **Large Transfer Anomaly** | Token transfer above a configurable threshold leaving a watched vault | "Drain in progress" |
+
 - Computes rolling window metrics (error rate, tx volume, compute units, instruction breakdown)
 - Fires configurable threshold alerts on those metrics (error rate spikes, tx volume anomalies)
-- Delivers alerts via WebSocket, TUI, and per-rule webhooks (Slack, Discord, anything that accepts a JSON POST)
+- Delivers alerts via WebSocket, tui, and per-rule webhooks (Slack, Discord, anything that accepts a JSON POST)
 - Exports Prometheus-compatible metrics for Grafana integration
 
 For the deep-dive on how each detection works, what it doesn't catch, and how to add a fourth: see [`docs/detections.md`](docs/detections.md).
@@ -40,21 +44,11 @@ git clone https://github.com/meowyx/gulfwatch.git
 cd gulfwatch
 ```
 
-Create a `.env` file in the project root:
+Create a `.env` file in the project root and add details from `.env.example`.
 
-```
-SOLANA_WS_URL=wss://api.devnet.solana.com
-SOLANA_RPC_URL=https://api.devnet.solana.com
-MONITOR_PROGRAM=TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
-```
 
-Or with a Helius API key for better rate limits:
-
-```
-SOLANA_WS_URL=wss://devnet.helius-rpc.com/?api-key=YOUR_KEY
-SOLANA_RPC_URL=https://devnet.helius-rpc.com/?api-key=YOUR_KEY
-MONITOR_PROGRAM=TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
-```
+<details>
+<summary>Large-transfer detection setup</summary>
 
 To arm the **large-transfer detection**, add the watched accounts and a threshold (in raw token units, for SOL with 9 decimals, `10000000000` is 10 SOL; for USDC with 6 decimals, `10000000000` is 10,000 USDC):
 
@@ -65,7 +59,12 @@ LARGE_TRANSFER_THRESHOLD=10000000000
 
 Without these two vars, the large-transfer detection is silently inert. The other two security detections (authority change and failed-tx cluster) need no configuration and run by default.
 
+</details>
+
 ## Running
+
+<details>
+<summary>Show running commands and keybindings</summary>
 
 ### TUI (terminal dashboard)
 
@@ -106,7 +105,12 @@ MONITOR_PROGRAMS=675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8,JUP6LkMUjV1hTVo8YS
 cargo test --workspace
 ```
 
+</details>
+
 ## API
+
+<details>
+<summary>Show REST and WebSocket API</summary>
 
 ### REST
 
@@ -136,6 +140,8 @@ Client sends:    { "subscribe": ["program_id"] }
 Server sends:    { "type": "transaction", "data": { ... } }
                  { "type": "alert", "data": { ... } }
 ```
+
+</details>
 
 ## Architecture
 
@@ -178,4 +184,3 @@ Deep-dive docs live in [`docs/`](docs/). Start with [`docs/README.md`](docs/READ
 | [`docs/architecture.md`](docs/architecture.md) | You want a mental model of the whole system before touching code |
 | [`docs/classification.md`](docs/classification.md) | You're debugging the parser, adding support for a new program, or trying to understand what the detections actually see |
 | [`docs/detections.md`](docs/detections.md) | You're rendering alerts in a UI, evaluating detection coverage, or planning a new detection rule |
-

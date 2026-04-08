@@ -1,6 +1,6 @@
 # GulfWatch docs
 
-Deep-dive documentation for the GulfWatch security monitor. The [root README](../README.md) covers what GulfWatch is, how to run it, and the public API surface, start there if you've never seen the project before. The docs in this folder go one layer deeper: how the pieces fit together, how transactions get classified, and how the security detections work.
+Deep-dive documentation for the GulfWatch security monitor. The main [README](../README.md) covers what GulfWatch is, how to run it, and the public API surface, start there if you've never seen the project before. The docs in this folder go one layer deeper: how the pieces fit together, how transactions get classified, and how the security detections work.
 
 ## What's in here
 
