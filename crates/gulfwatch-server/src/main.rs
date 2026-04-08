@@ -1,7 +1,11 @@
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use gulfwatch_core::alert::AlertEngine;
+use gulfwatch_core::detections::{
+    AuthorityChangeDetection, Detection, FailedTxClusterDetection, LargeTransferDetection,
+};
 use gulfwatch_core::pipeline::{WorkerHandle, run_processing_worker};
 use gulfwatch_core::AppState;
 use gulfwatch_ingest::{SolanaIngestClient, client::IngestConfig};
@@ -50,7 +54,25 @@ async fn main() {
     let ingest_client = SolanaIngestClient::new(ingest_config, state.ingest_tx.clone());
     let worker_handle = WorkerHandle::from(&state);
 
-    tokio::spawn(run_processing_worker(worker_handle, ingest_rx));
+    let watched_accounts = parse_watched_accounts();
+    let large_transfer_threshold = parse_large_transfer_threshold();
+    if !watched_accounts.is_empty() && large_transfer_threshold != u64::MAX {
+        info!(
+            count = watched_accounts.len(),
+            threshold = large_transfer_threshold,
+            "Large-transfer detection armed"
+        );
+    }
+
+    let detections: Vec<Box<dyn Detection>> = vec![
+        Box::new(AuthorityChangeDetection),
+        Box::new(FailedTxClusterDetection::default()),
+        Box::new(LargeTransferDetection::new(
+            watched_accounts,
+            large_transfer_threshold,
+        )),
+    ];
+    tokio::spawn(run_processing_worker(worker_handle, ingest_rx, detections));
     tokio::spawn(async move { ingest_client.run().await });
 
     let mut alert_engine = AlertEngine::new(
@@ -67,6 +89,22 @@ async fn main() {
 
 fn require_env(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("{key} not set — add it to .env"))
+}
+
+fn parse_watched_accounts() -> HashSet<String> {
+    std::env::var("WATCHED_ACCOUNTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn parse_large_transfer_threshold() -> u64 {
+    std::env::var("LARGE_TRANSFER_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(u64::MAX)
 }
 
 fn load_dotenv() {
