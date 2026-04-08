@@ -5,6 +5,7 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{error, info, warn};
 
 use crate::alert::{AlertEvent, AlertRule};
+use crate::detections::Detection;
 use crate::rolling_window::RollingWindow;
 use crate::transaction::Transaction;
 
@@ -63,6 +64,7 @@ pub struct WorkerHandle {
     pub windows: Arc<RwLock<HashMap<String, RollingWindow>>>,
     pub monitored_programs: Arc<RwLock<Vec<String>>>,
     pub tx_broadcast: broadcast::Sender<Transaction>,
+    pub alert_broadcast: broadcast::Sender<AlertEvent>,
 }
 
 impl From<&AppState> for WorkerHandle {
@@ -71,6 +73,7 @@ impl From<&AppState> for WorkerHandle {
             windows: Arc::clone(&state.windows),
             monitored_programs: Arc::clone(&state.monitored_programs),
             tx_broadcast: state.tx_broadcast.clone(),
+            alert_broadcast: state.alert_broadcast.clone(),
         }
     }
 }
@@ -78,8 +81,12 @@ impl From<&AppState> for WorkerHandle {
 pub async fn run_processing_worker(
     handle: WorkerHandle,
     mut ingest_rx: mpsc::Receiver<Transaction>,
+    mut detections: Vec<Box<dyn Detection>>,
 ) {
-    info!("Processing worker started");
+    info!(
+        detection_count = detections.len(),
+        "Processing worker started"
+    );
 
     let mut dead_letter_count: u64 = 0;
 
@@ -101,6 +108,19 @@ pub async fn run_processing_worker(
                 );
             }
             continue;
+        }
+
+        // Worker is single-task, so detections can hold &mut state without locks.
+        for detection in detections.iter_mut() {
+            if let Some(event) = detection.evaluate(&tx) {
+                info!(
+                    detection = detection.name(),
+                    signature = %tx.signature,
+                    program_id = %tx.program_id,
+                    "Security detection fired"
+                );
+                let _ = handle.alert_broadcast.send(event);
+            }
         }
 
         {
@@ -132,6 +152,7 @@ mod tests {
             accounts: vec![],
             fee_lamports: 5000,
             compute_units: 200_000,
+            instructions: vec![],
         }
     }
 
@@ -145,7 +166,7 @@ mod tests {
         let handle = WorkerHandle::from(&state);
 
         // Spawn the worker (handle does NOT hold an mpsc::Sender)
-        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx));
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
 
         // Send transactions
         sender.send(make_tx("prog_a", true)).await.unwrap();
@@ -185,7 +206,7 @@ mod tests {
         let sender = state.ingest_tx.clone();
         let handle = WorkerHandle::from(&state);
 
-        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx));
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
 
         sender.send(make_tx("prog", true)).await.unwrap();
 
