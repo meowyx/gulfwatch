@@ -4,14 +4,14 @@ use gulfwatch_core::AppState;
 use tokio::sync::broadcast;
 
 /// What the TUI is currently showing.
-#[derive(PartialEq)]
 pub enum View {
     /// Main dashboard with 3 panels.
     Dashboard,
-    /// Detail view for a selected transaction.
-    TransactionDetail(usize),
-    /// Detail view for a selected alert.
-    AlertDetail(usize),
+    /// Detail view for a snapshot of the selected transaction.
+    /// Holds its own copy so the live feed can't shift it underneath.
+    TransactionDetail(Box<Transaction>),
+    /// Detail view for a snapshot of the selected alert.
+    AlertDetail(Box<AlertEvent>),
 }
 
 /// Application state for the TUI.
@@ -103,13 +103,19 @@ impl App {
     }
 
     /// Open detail view for the currently selected item.
+    /// Snapshots the item by clone, so the live feed sliding under us
+    /// can't change what the detail view is showing.
     pub fn open_detail(&mut self) {
         match self.active_panel {
-            0 if !self.transactions.is_empty() => {
-                self.view = View::TransactionDetail(self.selected);
+            0 => {
+                if let Some(tx) = self.transactions.get(self.selected) {
+                    self.view = View::TransactionDetail(Box::new(tx.clone()));
+                }
             }
-            2 if !self.alerts.is_empty() => {
-                self.view = View::AlertDetail(self.selected);
+            2 => {
+                if let Some(alert) = self.alerts.get(self.selected) {
+                    self.view = View::AlertDetail(Box::new(alert.clone()));
+                }
             }
             _ => {}
         }

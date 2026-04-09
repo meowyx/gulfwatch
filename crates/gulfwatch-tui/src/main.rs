@@ -95,7 +95,7 @@ async fn run_app(
                 }
 
                 // View-specific keys
-                if app.view != View::Dashboard {
+                if !matches!(app.view, View::Dashboard) {
                     // Detail view: Esc or Backspace to go back
                     match key.code {
                         KeyCode::Esc | KeyCode::Backspace => app.close_detail(),

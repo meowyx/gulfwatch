@@ -16,7 +16,7 @@ The **parser**'s job is to open the envelope and stick a label on every item:
 - *"this is a swap on Raydium"*
 - *"this is someone changing the authority on a mint"*
 
-Once everything is labeled, the **detections** read the labels and decide whether anything looks bad. They never deal with the raw envelope contents themselves, that's the parser's job.
+Once everything is labeled, the **detections** read the labels and decide whether anything looks bad. They never deal with the raw envelope contents themselves — that's the parser's job.
 
 That separation is the whole architecture. Add a new detection? You write a function that pattern-matches on labels. Add a new program we want to understand? You teach the parser one new label format. Neither side has to know about the other.
 
@@ -69,10 +69,10 @@ flowchart TD
 
 The whole thing lives in `crates/gulfwatch-ingest/src/parser.rs`. Two functions matter most:
 
-- **`extract_all_instructions`**, walks both the top-level instructions AND the inner instructions (CPIs) and returns a flat list. This is the function that makes Feature 3 (large transfer detection) work against Raydium swaps, because the actual token movements are *inside* the swap call as inner instructions.
-- **`classify_instruction`**, the dispatch table. Takes `(program_id, raw_bytes)` and returns an `InstructionKind`. This is the function that knows how to read SPL Token tags, BPF Loader discriminators, and Anchor discriminators.
+- **`extract_all_instructions`** — walks both the top-level instructions AND the inner instructions (CPIs) and returns a flat list. This is the function that makes Feature 3 (large transfer detection) work against Raydium swaps, because the actual token movements are *inside* the swap call as inner instructions.
+- **`classify_instruction`** — the dispatch table. Takes `(program_id, raw_bytes)` and returns an `InstructionKind`. This is the function that knows how to read SPL Token tags, BPF Loader discriminators, and Anchor discriminators.
 
-## The label types, `InstructionKind`
+## The label types: `InstructionKind`
 
 Every classified instruction becomes one of these variants. Defined in `crates/gulfwatch-core/src/transaction.rs`:
 
@@ -96,9 +96,9 @@ pub enum InstructionKind {
 | `Other { name }` | A classified-but-not-pre-decoded instruction. The string is a human name like `"swap"`, `"route"`, or `"addLiquidity"`. | Just the name. |
 | `Unknown` | An instruction we couldn't decode at all (empty data, or no rules matched). | None. |
 
-The key idea: **whatever data a detection needs is already extracted into the variant**. `LargeTransferDetection` doesn't have to decode bytes to find the transfer amount, it pattern-matches on `TokenTransfer { amount }` and the field is right there.
+The key idea: **whatever data a detection needs is already extracted into the variant**. `LargeTransferDetection` doesn't have to decode bytes to find the transfer amount — it pattern-matches on `TokenTransfer { amount }` and the field is right there.
 
-## The dispatch table, what we recognize per program
+## The dispatch table: what we recognize per program
 
 The reason classification has to dispatch by program is that **different programs encode "which instruction is this" differently**. Three formats matter:
 
@@ -120,7 +120,7 @@ The most important program we decode is the SPL Token Program (`TokenkegQfeZyiNw
 | **SetAuthority** | 6 | `tag(1) \| authority_type(1) \| option<new_authority>` | (existence only) |
 | **TransferChecked** | 12 | `tag(1) \| amount(8 LE u64) \| decimals(1)` | `amount`, `decimals` |
 
-Why we picked these three: Transfer + TransferChecked together cover **every** token movement on Solana, which is what `LargeTransferDetection` needs. SetAuthority is one half of the Authority Change detection (the other half is the BPF Loader Upgrade). That's it for Phase 1, we'll add more (Burn, MintTo, etc.) when future detections need them.
+Why we picked these three: Transfer + TransferChecked together cover **every** token movement on Solana, which is what `LargeTransferDetection` needs. SetAuthority is one half of the Authority Change detection (the other half is the BPF Loader Upgrade). That's it for Phase 1 — we'll add more (Burn, MintTo, etc.) when future detections need them.
 
 The actual decoding lives in `classify_spl_token`:
 
@@ -225,7 +225,7 @@ That's it. Detections that already exist will naturally see the new instruction 
 
 Honest list of things the parser doesn't decode yet, in case you spot one of them and wonder why:
 
-- **BPF Loader Upgradeable: only `Upgrade` (3) is decoded.** The loader also has `SetAuthority` (4) and `SetAuthorityChecked` (7) instructions that change a program's upgrade authority, these are also security-relevant but currently classify as `Other { name: "loader_ix_<tag>" }`. Wiring them up is one extra match arm in `classify_bpf_loader_upgradeable`.
+- **BPF Loader Upgradeable: only `Upgrade` (3) is decoded.** The loader also has `SetAuthority` (4) and `SetAuthorityChecked` (7) instructions that change a program's upgrade authority — these are also security-relevant but currently classify as `Other { name: "loader_ix_<tag>" }`. Wiring them up is one extra match arm in `classify_bpf_loader_upgradeable`.
 - **SPL Token: only Transfer / SetAuthority / TransferChecked are decoded.** Burn, MintTo, CloseAccount, etc. all become `Other { name: "token_ix_<tag>" }`. Detections that need them (e.g. a future "infinite mint" detection) will be cheap to add.
 - **Token-2022 (the newer SPL Token Program at `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`) is not yet recognized.** Same instruction layout as classic SPL Token, just a different program ID. Adding it is a one-line constant.
 

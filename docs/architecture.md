@@ -4,7 +4,7 @@
 
 ## The problem this solves
 
-Solana protocols lose hundreds of millions of dollars to exploits every year, Wormhole ($320M), Mango Markets ($114M), Crema ($8.8M). Every one of these had a visible on-chain footprint *before* the actual drain happened: an authority change here, a burst of failed probing transactions there, then the final draining transfer. Protocol teams almost always learn about it from Twitter, minutes too late.
+Solana protocols lose hundreds of millions of dollars to exploits every year: Wormhole ($320M), Mango Markets ($114M), Crema ($8.8M). Every one of these had a visible on-chain footprint *before* the actual drain happened: an authority change here, a burst of failed probing transactions there, then the final draining transfer. Protocol teams almost always learn about it from Twitter, minutes too late.
 
 Mature security monitoring exists for Ethereum (Forta, OpenZeppelin Defender). For Solana there's a gap: teams either build janky webhook scripts themselves, or they wait for the explosion. **GulfWatch fills that gap.** It watches monitored programs in real time, classifies every instruction inside every transaction, and fires alerts the second a known-bad pattern shows up.
 
@@ -51,35 +51,35 @@ If you only read one thing in this doc, read the diagram. Everything else is det
 
 ## The four crates
 
-GulfWatch is a Cargo workspace with four crates. Each one has a single sharp responsibility, when something breaks, you know which crate to open.
+GulfWatch is a Cargo workspace with four crates. Each one has a single sharp responsibility — when something breaks, you know which crate to open.
 
-### `gulfwatch-core`, the brain
+### `gulfwatch-core`: the brain
 
 Lives at `crates/gulfwatch-core/`. Contains every type and every algorithm that doesn't touch the network. Pure data-in / data-out.
 
 | Module | What it does |
 |---|---|
 | `transaction.rs` | The `Transaction`, `ParsedInstruction`, and `InstructionKind` types. The data model for a parsed Solana transaction. |
-| `pipeline.rs` | `AppState` (shared state for all consumers), `WorkerHandle`, and `run_processing_worker`, the loop that runs detections and broadcasts events. |
+| `pipeline.rs` | `AppState` (shared state for all consumers), `WorkerHandle`, and `run_processing_worker` — the loop that runs detections and broadcasts events. |
 | `rolling_window.rs` | Per-program ring buffer of recent transactions, used for time-bucketed metric aggregation. |
 | `metrics.rs` | The `MetricSummary` shape returned by the REST API. |
 | `alert.rs` | `AlertRule`, `AlertEvent`, and the threshold-based `AlertEngine` (separate from the detection trait, it handles classic metric-based alerts like "error rate > 10%"). |
 | `detections/` | The three Phase 1 security detections (`authority_change`, `failed_tx_cluster`, `large_transfer`) plus the `Detection` trait they all implement. |
 
-**Why this is a separate crate:** the core has zero I/O. No HTTP, no WebSocket, no Solana RPC. Every test in `gulfwatch-core` runs in milliseconds with no network, 41 unit tests live here, and they execute in well under a second.
+**Why this is a separate crate:** the core has zero I/O. No HTTP, no WebSocket, no Solana RPC. Every test in `gulfwatch-core` runs in milliseconds with no network — 41 unit tests live here, and they execute in well under a second.
 
-### `gulfwatch-ingest`, the eyes
+### `gulfwatch-ingest`: the eyes
 
 Lives at `crates/gulfwatch-ingest/`. The Solana data adapter. Subscribes to Solana over WebSocket, fetches full transaction details over HTTP, and pushes parsed `Transaction` objects into an mpsc channel that the core's worker drains.
 
 | Module | What it does |
 |---|---|
-| `client.rs` | `SolanaIngestClient`, opens the WebSocket, calls `logsSubscribe`, fetches transactions via `getTransaction`, handles reconnect with exponential backoff. |
+| `client.rs` | `SolanaIngestClient` — opens the WebSocket, calls `logsSubscribe`, fetches transactions via `getTransaction`, handles reconnect with exponential backoff. |
 | `parser.rs` | The classification engine. Turns raw `getTransaction` JSON into the typed `Transaction` from `gulfwatch-core`. **This is where every "what is this instruction?" decision happens.** See [`classification.md`](classification.md) for the deep dive. |
 
 **Why ingest is separate from core:** the only thing tied to a Solana RPC URL lives in this crate. If we ever want to swap WebSocket RPC for Yellowstone gRPC, or add a "replay from a JSON dump" mode for offline testing, we change *this* crate and nothing downstream notices.
 
-### `gulfwatch-server`, the front door for the web dashboard
+### `gulfwatch-server`: the front door for the web dashboard
 
 Lives at `crates/gulfwatch-server/`. An axum HTTP + WebSocket server. Wires `gulfwatch-ingest` and `gulfwatch-core` together, exposes a REST API + a WebSocket feed + a Prometheus `/metrics` endpoint, and is what the Next.js frontend in `web/` talks to.
 
@@ -91,7 +91,7 @@ cargo run -p gulfwatch-server
 
 The REST + WebSocket API contract lives in the [root README](../README.md#api).
 
-### `gulfwatch-tui`, the standalone terminal dashboard
+### `gulfwatch-tui`: the standalone terminal dashboard
 
 Lives at `crates/gulfwatch-tui/`. A Ratatui terminal app. **Standalone**: runs its own ingest pipeline, doesn't need the server, doesn't talk to the server. Perfect for live demos and for monitoring a program from a single command on a laptop.
 
@@ -121,7 +121,7 @@ The choices below aren't obvious from reading the code. They're worth knowing be
 
 Real-time security monitoring cares about "what's happening in the last 5–15 minutes," not "query historical data from March." We keep a rolling in-memory window of recent transactions and compute every metric from that buffer. When the process restarts, it picks up fresh from the live stream.
 
-The win: **GulfWatch is a single binary with no external dependencies besides a Solana RPC endpoint.** Zero ops surface. No database to back up, no schema migrations, no "the storage layer is down" outage mode. The transaction data itself lives on-chain, we don't need to duplicate it.
+The win: **GulfWatch is a single binary with no external dependencies besides a Solana RPC endpoint.** Zero ops surface. No database to back up, no schema migrations, no "the storage layer is down" outage mode. The transaction data itself lives on-chain — we don't need to duplicate it.
 
 ### Typed enums in core, parsing at the edge.
 
@@ -134,7 +134,7 @@ match ix.kind {
 }
 ```
 
-The total Rust code for all three Phase 1 detections is under 200 lines because none of them have to decode bytes, that work happens once, in the parser, at the edge of the system. Add a fourth detection? Three lines plus a registration call.
+The total Rust code for all three Phase 1 detections is under 200 lines because none of them have to decode bytes — that work happens once, in the parser, at the edge of the system. Add a fourth detection? Three lines plus a registration call.
 
 ### Two binaries, not one.
 
@@ -160,7 +160,7 @@ The processing worker loops through them on every transaction without knowing wh
 
 ## What GulfWatch deliberately does not do (yet)
 
-Honest list. These are not bugs, they're scope choices for Phase 1.
+Honest list. These are not bugs — they're scope choices for Phase 1.
 
 - **No persistence.** All state lives in memory. Restart = fresh window. Historical baselines come post-hackathon.
 - **No mainnet hardening for sustained high volume.** Tested against devnet and a single mainnet program (Raydium AMM v4). Phase 2 stress-tests against mainnet's actual throughput and tunes channel bounds + window size.
@@ -170,6 +170,6 @@ Honest list. These are not bugs, they're scope choices for Phase 1.
 
 ## Where to read next
 
-- **[`classification.md`](classification.md)**, how a raw Solana transaction becomes a typed `ParsedInstruction`. Read this if you want to understand the parser, or if you want to add support for a new program.
-- **[`detections.md`](detections.md)**, the three Phase 1 security rules: what they fire on, why they matter, and how to configure them.
-- **[Root `README.md`](../README.md)**, install instructions, environment variables, and the REST + WebSocket API contract that the frontend talks to.
+- **[`classification.md`](classification.md)** — how a raw Solana transaction becomes a typed `ParsedInstruction`. Read this if you want to understand the parser, or if you want to add support for a new program.
+- **[`detections.md`](detections.md)** — the three Phase 1 security rules: what they fire on, why they matter, and how to configure them.
+- **[Root `README.md`](../README.md)** — install instructions, environment variables, and the REST + WebSocket API contract that the frontend talks to.

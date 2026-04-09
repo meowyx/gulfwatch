@@ -1,3 +1,5 @@
+use gulfwatch_core::alert::AlertEvent;
+use gulfwatch_core::transaction::Transaction;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation,
@@ -18,8 +20,8 @@ const SELECTED_BG: Color = Color::Rgb(30, 40, 60);
 pub fn draw(f: &mut Frame, app: &App) {
     match &app.view {
         View::Dashboard => draw_dashboard(f, app),
-        View::TransactionDetail(idx) => draw_tx_detail(f, app, *idx),
-        View::AlertDetail(idx) => draw_alert_detail(f, app, *idx),
+        View::TransactionDetail(tx) => draw_tx_detail(f, tx),
+        View::AlertDetail(alert) => draw_alert_detail(f, alert),
     }
 }
 
@@ -364,15 +366,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
 // ─── Transaction Detail View ─────────────────────────────
 
-fn draw_tx_detail(f: &mut Frame, app: &App, idx: usize) {
-    let tx = match app.transactions.get(idx) {
-        Some(t) => t,
-        None => {
-            // Transaction was evicted, go back
-            return;
-        }
-    };
-
+fn draw_tx_detail(f: &mut Frame, tx: &Transaction) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -476,12 +470,7 @@ fn draw_tx_detail(f: &mut Frame, app: &App, idx: usize) {
 
 // ─── Alert Detail View ───────────────────────────────────
 
-fn draw_alert_detail(f: &mut Frame, app: &App, idx: usize) {
-    let alert = match app.alerts.get(idx) {
-        Some(a) => a,
-        None => return,
-    };
-
+fn draw_alert_detail(f: &mut Frame, alert: &AlertEvent) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

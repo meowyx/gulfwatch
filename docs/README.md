@@ -1,6 +1,6 @@
 # GulfWatch docs
 
-Deep-dive documentation for the GulfWatch security monitor. The main [README](../README.md) covers what GulfWatch is, how to run it, and the public API surface, start there if you've never seen the project before. The docs in this folder go one layer deeper: how the pieces fit together, how transactions get classified, and how the security detections work.
+Deep-dive documentation for the GulfWatch security monitor. The main [README](../README.md) covers what GulfWatch is, how to run it, and the public API surface — start there if you've never seen the project before. The docs in this folder go one layer deeper: how the pieces fit together, how transactions get classified, and how the security detections work.
 
 ## What's in here
 
@@ -14,15 +14,15 @@ Deep-dive documentation for the GulfWatch security monitor. The main [README](..
 
 **If you're seeing GulfWatch for the first time** (judge, recruiter, curious dev):
 
-1. [Root README](../README.md), what it is, what it does, how to run it
-2. [`architecture.md`](architecture.md), the system in one picture
-3. [`detections.md`](detections.md), the security pitch made concrete
+1. [Root README](../README.md) — what it is, what it does, how to run it
+2. [`architecture.md`](architecture.md) — the system in one picture
+3. [`detections.md`](detections.md) — the security pitch made concrete
 
 **If you're implementing against GulfWatch** (frontend dev, integration, new detection):
 
-1. [`architecture.md`](architecture.md), find the seam you're working at
-2. [`classification.md`](classification.md), only the section relevant to your seam (parser, transaction shape, or detection plug-in shape)
-3. [`detections.md`](detections.md), the alert payload table and "adding a new detection" recipe
+1. [`architecture.md`](architecture.md) — find the seam you're working at
+2. [`classification.md`](classification.md) — only the section relevant to your seam (parser, transaction shape, or detection plug-in shape)
+3. [`detections.md`](detections.md) — the alert payload table and "adding a new detection" recipe
 
 **If you just want to ship one specific thing**, jump straight to:
 
