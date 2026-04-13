@@ -33,7 +33,7 @@ async fn main() {
         .parse()
         .expect("invalid LISTEN_ADDR");
 
-    let (state, ingest_rx) = AppState::new(1024, 10);
+    let (state, ingest_rx) = AppState::new(1024, parse_rolling_window_minutes());
 
     let programs_str = std::env::var("MONITOR_PROGRAMS")
         .or_else(|_| std::env::var("MONITOR_PROGRAM"))
@@ -105,6 +105,13 @@ fn parse_large_transfer_threshold() -> u64 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(u64::MAX)
+}
+
+fn parse_rolling_window_minutes() -> i64 {
+    std::env::var("ROLLING_WINDOW_MINUTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10)
 }
 
 fn load_dotenv() {
