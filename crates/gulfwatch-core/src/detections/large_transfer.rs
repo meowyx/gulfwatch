@@ -138,6 +138,7 @@ mod tests {
             fee_lamports: 5000,
             compute_units: 200_000,
             instructions,
+            cu_profile: None,
         }
     }
 

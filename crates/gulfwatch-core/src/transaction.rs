@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::cu_attribution::CuProfile;
+
 /// A single instruction inside a transaction, classified by the parser.
 /// Detections pattern-match on this instead of re-parsing raw bytes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -61,6 +63,8 @@ pub struct Transaction {
     pub compute_units: u64,
     #[serde(default)]
     pub instructions: Vec<ParsedInstruction>,
+    #[serde(default)]
+    pub cu_profile: Option<CuProfile>,
 }
 
 impl Transaction {

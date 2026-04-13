@@ -48,6 +48,7 @@ mod tests {
             fee_lamports: 0,
             compute_units: 0,
             instructions: vec![],
+            cu_profile: None,
         }
     }
 

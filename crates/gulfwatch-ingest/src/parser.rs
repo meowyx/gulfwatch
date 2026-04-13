@@ -1,5 +1,5 @@
 use chrono::{DateTime, TimeZone, Utc};
-use gulfwatch_core::{InstructionKind, ParsedInstruction, Transaction};
+use gulfwatch_core::{InstructionKind, ParsedInstruction, Transaction, parse_logs};
 use serde_json::Value;
 
 const SPL_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -28,6 +28,22 @@ pub fn parse_transaction(raw: &Value, signature: &str, target_program: &str) -> 
         .get("computeUnitsConsumed")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+
+    let log_messages: Vec<String> = meta
+        .get("logMessages")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|l| l.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let cu_profile = if log_messages.is_empty() {
+        None
+    } else {
+        Some(parse_logs(&log_messages, compute_units))
+    };
 
     let accounts: Vec<String> = message
         .get("accountKeys")
@@ -58,6 +74,7 @@ pub fn parse_transaction(raw: &Value, signature: &str, target_program: &str) -> 
         fee_lamports,
         compute_units,
         instructions,
+        cu_profile,
     })
 }
 

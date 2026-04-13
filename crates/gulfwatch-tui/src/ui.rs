@@ -1,4 +1,5 @@
 use gulfwatch_core::alert::AlertEvent;
+use gulfwatch_core::cu_attribution::NATIVE_PROGRAM_CU;
 use gulfwatch_core::transaction::Transaction;
 use ratatui::{
     prelude::*,
@@ -441,12 +442,15 @@ fn draw_tx_detail(f: &mut Frame, tx: &Transaction) {
                 Style::default().fg(Color::White),
             ),
         ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("  Accounts ({}):", tx.accounts.len()),
-            Style::default().fg(DIM_COLOR),
-        )),
     ];
+
+    lines.extend(cu_profile_lines(tx));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  Accounts ({}):", tx.accounts.len()),
+        Style::default().fg(DIM_COLOR),
+    )));
 
     for (i, account) in tx.accounts.iter().enumerate() {
         lines.push(Line::from(vec![
@@ -550,4 +554,137 @@ fn format_cu(cu: u64) -> String {
     } else {
         format!("{}", cu)
     }
+}
+
+fn cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
+    let profile = match &tx.cu_profile {
+        Some(p) => p,
+        None => {
+            return vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  CU Profile:  ", Style::default().fg(DIM_COLOR)),
+                    Span::styled("unavailable (no log messages)", Style::default().fg(DIM_COLOR)),
+                ]),
+            ];
+        }
+    };
+
+    let top_level = profile.top_level_sorted_by_cu();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
+
+    let (badge_text, badge_color) = if profile.verified {
+        ("verified ✓", SUCCESS_COLOR)
+    } else {
+        ("reconstruction incomplete ⚠", ALERT_COLOR)
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("  CU Profile:  ", Style::default().fg(DIM_COLOR)),
+        Span::styled(badge_text, Style::default().fg(badge_color)),
+    ]));
+
+    if top_level.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (no top-level invocations parsed)",
+            Style::default().fg(DIM_COLOR),
+        )));
+        return lines;
+    }
+
+    let max_cu = top_level
+        .iter()
+        .map(|inv| inv.consumed_cu.unwrap_or(NATIVE_PROGRAM_CU))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    const BAR_WIDTH: usize = 20;
+
+    for (idx, inv) in top_level.iter().enumerate() {
+        let cu = inv.consumed_cu.unwrap_or(NATIVE_PROGRAM_CU);
+        let pct = if profile.reported_total > 0 {
+            (cu as f64 / profile.reported_total as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let filled = ((cu as f64 / max_cu as f64) * BAR_WIDTH as f64).round() as usize;
+        let filled = filled.clamp(1, BAR_WIDTH);
+        let bar: String = "█".repeat(filled) + &" ".repeat(BAR_WIDTH - filled);
+
+        let pid_short = if inv.program_id.len() > 20 {
+            format!(
+                "{}…{}",
+                &inv.program_id[..10],
+                &inv.program_id[inv.program_id.len() - 4..]
+            )
+        } else {
+            inv.program_id.clone()
+        };
+
+        let is_native = inv.consumed_cu.is_none();
+        let row_color = if inv.failed {
+            ERROR_COLOR
+        } else if is_native {
+            DIM_COLOR
+        } else {
+            Color::White
+        };
+
+        let tags = match (is_native, inv.failed) {
+            (true, true) => " (native, FAILED)".to_string(),
+            (true, false) => " (native)".to_string(),
+            (false, true) => " FAILED".to_string(),
+            (false, false) => String::new(),
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("    [{:>2}] ", idx), Style::default().fg(DIM_COLOR)),
+            Span::styled(format!("{:>10} CU  ", format_cu_full(cu)), Style::default().fg(row_color)),
+            Span::styled(bar, Style::default().fg(HEADER_COLOR)),
+            Span::styled(format!("  {:>5.1}%  ", pct), Style::default().fg(DIM_COLOR)),
+            Span::styled(format!("{}{}", pid_short, tags), Style::default().fg(row_color)),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!(
+                "    total: {} CU reconstructed / {} CU reported",
+                format_cu_full(profile.reconstructed_total),
+                format_cu_full(profile.reported_total),
+            ),
+            Style::default().fg(DIM_COLOR),
+        ),
+    ]));
+
+    if profile.native_overhead_cu > 0 {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(
+                    "    native program overhead: {} CU ({} × {} CU)",
+                    profile.native_overhead_cu,
+                    profile.native_overhead_cu / NATIVE_PROGRAM_CU,
+                    NATIVE_PROGRAM_CU,
+                ),
+                Style::default().fg(DIM_COLOR),
+            ),
+        ]));
+    }
+
+    lines
+}
+
+fn format_cu_full(cu: u64) -> String {
+    let s = cu.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
 }

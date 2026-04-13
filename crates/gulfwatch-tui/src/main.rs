@@ -24,7 +24,7 @@ use ratatui::prelude::*;
 async fn main() -> io::Result<()> {
     load_dotenv();
 
-    let (state, ingest_rx) = AppState::new(1024, 10);
+    let (state, ingest_rx) = AppState::new(1024, parse_rolling_window_minutes());
 
     let program_id = require_env("MONITOR_PROGRAM");
     state.add_program(program_id.clone()).await;
@@ -140,6 +140,13 @@ fn parse_large_transfer_threshold() -> u64 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(u64::MAX)
+}
+
+fn parse_rolling_window_minutes() -> i64 {
+    std::env::var("ROLLING_WINDOW_MINUTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10)
 }
 
 fn load_dotenv() {

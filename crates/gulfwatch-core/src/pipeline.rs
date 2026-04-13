@@ -153,6 +153,7 @@ mod tests {
             fee_lamports: 5000,
             compute_units: 200_000,
             instructions: vec![],
+            cu_profile: None,
         }
     }
 
