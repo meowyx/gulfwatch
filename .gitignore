@@ -9,3 +9,6 @@ web/.env.local
 # General
 .env
 .DS_Store
+
+# Local planning mirror (source of truth lives in Obsidian)
+plan.md
