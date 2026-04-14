@@ -6,6 +6,7 @@ pub mod pipeline;
 pub mod rolling_window;
 pub mod transaction;
 
+pub use gulfwatch_classification::{ClassificationDebugTrace, TransactionClassification};
 pub use alert::{AlertEngine, AlertEvent, AlertRule};
 pub use cu_attribution::{CuProfile, Invocation, NATIVE_PROGRAM_CU, parse_logs};
 pub use detections::{

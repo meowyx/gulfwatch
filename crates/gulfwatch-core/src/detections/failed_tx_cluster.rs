@@ -109,6 +109,8 @@ mod tests {
             compute_units: 200_000,
             instructions: vec![],
             cu_profile: None,
+            classification: None,
+            classification_debug: None,
         }
     }
 
@@ -123,7 +125,9 @@ mod tests {
         }
 
         let success = make_tx("attacker", true, now + Duration::seconds(4));
-        let event = det.evaluate(&success).expect("success after cluster should fire");
+        let event = det
+            .evaluate(&success)
+            .expect("success after cluster should fire");
         assert_eq!(event.metric, "failed_tx_cluster");
         assert_eq!(event.value, 3.0);
         assert_eq!(event.threshold, 3.0);

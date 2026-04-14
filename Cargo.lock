@@ -725,10 +725,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gulfwatch-classification"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "gulfwatch-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "gulfwatch-classification",
  "native-tls",
  "serde",
  "serde_json",

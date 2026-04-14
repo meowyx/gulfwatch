@@ -49,6 +49,8 @@ mod tests {
             compute_units: 0,
             instructions: vec![],
             cu_profile: None,
+            classification: None,
+            classification_debug: None,
         }
     }
 

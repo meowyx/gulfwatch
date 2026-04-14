@@ -1,6 +1,9 @@
 # Classification
 
-How GulfWatch turns a raw Solana transaction into something a security detection can pattern-match on.
+How GulfWatch turns a raw Solana transaction into typed instructions that security detections can pattern-match on.
+
+This document is about **instruction-level parsing** in `gulfwatch-ingest`.
+For **transaction-level semantic labels** (`swap`, `bridge_out`, `nft_send`, etc.), see [`transaction-classification.md`](transaction-classification.md).
 
 If you remember one sentence: **the parser labels every instruction inside a transaction with a typed enum, and the detections never see raw bytes.**
 
@@ -80,8 +83,11 @@ Every classified instruction becomes one of these variants. Defined in `crates/g
 pub enum InstructionKind {
     SetAuthority,
     Upgrade,
+    SystemTransfer { lamports: u64 },
     TokenTransfer { amount: u64 },
     TokenTransferChecked { amount: u64, decimals: u8 },
+    StakeDelegate,
+    StakeWithdraw,
     Other { name: String },
     Unknown,
 }
@@ -91,8 +97,11 @@ pub enum InstructionKind {
 |---|---|---|
 | `SetAuthority` | SPL Token Program SetAuthority (tag 6). Changes mint authority, freeze authority, or token account owner. | None, the existence of the instruction is the signal. |
 | `Upgrade` | BPF Loader Upgradeable Upgrade (u32 LE = 3). Replaces a program's bytecode. | None. |
+| `SystemTransfer { lamports }` | Native System Program transfer instruction. | Lamports moved. |
 | `TokenTransfer { amount }` | SPL Token Program Transfer (tag 3). Moves tokens from a source account. | The amount, in raw token units. |
 | `TokenTransferChecked { amount, decimals }` | SPL Token Program TransferChecked (tag 12). Same as Transfer but with explicit decimals for type-safety. | The amount AND the decimals declared by the instruction. |
+| `StakeDelegate` | Stake Program delegate operation. | None (existence is the signal). |
+| `StakeWithdraw` | Stake Program withdraw operation. | None (existence is the signal). |
 | `Other { name }` | A classified-but-not-pre-decoded instruction. The string is a human name like `"swap"`, `"route"`, or `"addLiquidity"`. | Just the name. |
 | `Unknown` | An instruction we couldn't decode at all (empty data, or no rules matched). | None. |
 

@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use gulfwatch_classification::{
+    ClassificationContext, ClassificationService, InstructionInput, InstructionInputKind,
+};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{error, info, warn};
 
 use crate::alert::{AlertEvent, AlertRule};
 use crate::detections::Detection;
 use crate::rolling_window::RollingWindow;
-use crate::transaction::Transaction;
+use crate::transaction::{InstructionKind, Transaction};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -89,8 +92,9 @@ pub async fn run_processing_worker(
     );
 
     let mut dead_letter_count: u64 = 0;
+    let classification_service = ClassificationService::new();
 
-    while let Some(tx) = ingest_rx.recv().await {
+    while let Some(mut tx) = ingest_rx.recv().await {
         let program_id = tx.program_id.clone();
 
         let is_monitored = {
@@ -109,6 +113,19 @@ pub async fn run_processing_worker(
             }
             continue;
         }
+
+        let classification_instructions = to_classification_instructions(&tx);
+        let classification_context = ClassificationContext {
+            instruction_type: tx.instruction_type.as_deref(),
+            success: tx.success,
+            compute_units: tx.compute_units,
+            fee_lamports: tx.fee_lamports,
+            accounts: &tx.accounts,
+            instructions: &classification_instructions,
+        };
+        let classification = classification_service.classify(&classification_context);
+        tx.classification = Some(classification.classification);
+        tx.classification_debug = Some(classification.debug_trace);
 
         // Worker is single-task, so detections can hold &mut state without locks.
         for detection in detections.iter_mut() {
@@ -136,6 +153,38 @@ pub async fn run_processing_worker(
     error!("Processing worker stopped — ingest channel closed");
 }
 
+fn to_classification_instructions(tx: &Transaction) -> Vec<InstructionInput> {
+    tx.instructions
+        .iter()
+        .map(|instruction| InstructionInput {
+            program_id: instruction.program_id.clone(),
+            kind: match &instruction.kind {
+                InstructionKind::SetAuthority => InstructionInputKind::SetAuthority,
+                InstructionKind::Upgrade => InstructionInputKind::Upgrade,
+                InstructionKind::SystemTransfer { lamports } => {
+                    InstructionInputKind::SystemTransfer { lamports: *lamports }
+                }
+                InstructionKind::TokenTransfer { amount } => {
+                    InstructionInputKind::TokenTransfer { amount: *amount }
+                }
+                InstructionKind::TokenTransferChecked { amount, decimals } => {
+                    InstructionInputKind::TokenTransferChecked {
+                        amount: *amount,
+                        decimals: *decimals,
+                    }
+                }
+                InstructionKind::StakeDelegate => InstructionInputKind::StakeDelegate,
+                InstructionKind::StakeWithdraw => InstructionInputKind::StakeWithdraw,
+                InstructionKind::Other { name } => {
+                    InstructionInputKind::Other { name: name.clone() }
+                }
+                InstructionKind::Unknown => InstructionInputKind::Unknown,
+            },
+            accounts: instruction.accounts.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +203,8 @@ mod tests {
             compute_units: 200_000,
             instructions: vec![],
             cu_profile: None,
+            classification: None,
+            classification_debug: None,
         }
     }
 
@@ -184,6 +235,11 @@ mod tests {
             let a_summary = windows.get("prog_a").unwrap().summary("prog_a");
             assert_eq!(a_summary.tx_count, 2);
             assert_eq!(a_summary.error_count, 1);
+
+            let recent_a = windows.get("prog_a").unwrap().recent(1);
+            assert_eq!(recent_a.len(), 1);
+            assert!(recent_a[0].classification.is_some());
+            assert!(recent_a[0].classification_debug.is_some());
 
             let b_summary = windows.get("prog_b").unwrap().summary("prog_b");
             assert_eq!(b_summary.tx_count, 1);

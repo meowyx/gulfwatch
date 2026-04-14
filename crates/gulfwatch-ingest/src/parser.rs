@@ -1,11 +1,17 @@
 use chrono::{DateTime, TimeZone, Utc};
-use gulfwatch_core::{InstructionKind, ParsedInstruction, Transaction, parse_logs};
+use gulfwatch_core::{parse_logs, InstructionKind, ParsedInstruction, Transaction};
 use serde_json::Value;
 
-const SPL_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
-const BPF_LOADER_UPGRADEABLE: &str = "BPFLoaderUpgradeab1e11111111111111111111111";
+use crate::program_ids::{
+    BPF_LOADER_UPGRADEABLE, MEMO_V1_PROGRAM, SPL_MEMO_PROGRAM, SPL_TOKEN_PROGRAM,
+    STAKE_POOL_PROGRAM, STAKE_PROGRAM, SYSTEM_PROGRAM,
+};
 
-pub fn parse_transaction(raw: &Value, signature: &str, target_program: &str) -> Option<Transaction> {
+pub fn parse_transaction(
+    raw: &Value,
+    signature: &str,
+    target_program: &str,
+) -> Option<Transaction> {
     let result = raw.get("result")?;
     if result.is_null() {
         return None;
@@ -48,7 +54,11 @@ pub fn parse_transaction(raw: &Value, signature: &str, target_program: &str) -> 
     let accounts: Vec<String> = message
         .get("accountKeys")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|a| a.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let instructions = extract_all_instructions(message, meta, &accounts);
@@ -75,6 +85,8 @@ pub fn parse_transaction(raw: &Value, signature: &str, target_program: &str) -> 
         compute_units,
         instructions,
         cu_profile,
+        classification: None,
+        classification_debug: None,
     })
 }
 
@@ -149,6 +161,20 @@ fn classify_instruction(program_id: &str, data: &[u8]) -> InstructionKind {
         return classify_spl_token(data);
     }
 
+    if program_id == SYSTEM_PROGRAM {
+        return classify_system_program(data);
+    }
+
+    if program_id == STAKE_PROGRAM || program_id == STAKE_POOL_PROGRAM {
+        return classify_stake_program(data);
+    }
+
+    if program_id == SPL_MEMO_PROGRAM || program_id == MEMO_V1_PROGRAM {
+        return InstructionKind::Other {
+            name: "memo".to_string(),
+        };
+    }
+
     if program_id == BPF_LOADER_UPGRADEABLE {
         return classify_bpf_loader_upgradeable(data);
     }
@@ -202,6 +228,35 @@ fn classify_spl_token(data: &[u8]) -> InstructionKind {
     }
 }
 
+fn classify_system_program(data: &[u8]) -> InstructionKind {
+    if data.len() >= 12 {
+        let disc = u32::from_le_bytes(data[..4].try_into().unwrap_or([0; 4]));
+        if disc == 2 {
+            let lamports = u64::from_le_bytes(data[4..12].try_into().unwrap_or([0; 8]));
+            return InstructionKind::SystemTransfer { lamports };
+        }
+    }
+
+    InstructionKind::Other {
+        name: format!("system_ix_{}", data[0]),
+    }
+}
+
+fn classify_stake_program(data: &[u8]) -> InstructionKind {
+    if data.len() >= 4 {
+        let disc = u32::from_le_bytes(data[..4].try_into().unwrap_or([0; 4]));
+        return match disc {
+            2 => InstructionKind::StakeDelegate,
+            4 => InstructionKind::StakeWithdraw,
+            _ => InstructionKind::Other {
+                name: format!("stake_ix_{}", disc),
+            },
+        };
+    }
+
+    InstructionKind::Unknown
+}
+
 fn classify_bpf_loader_upgradeable(data: &[u8]) -> InstructionKind {
     if data.len() >= 4 {
         let disc = u32::from_le_bytes(data[..4].try_into().unwrap_or([0; 4]));
@@ -215,11 +270,7 @@ fn classify_bpf_loader_upgradeable(data: &[u8]) -> InstructionKind {
 }
 
 fn hex_prefix(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .take(4)
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    bytes.iter().take(4).map(|b| format!("{:02x}", b)).collect()
 }
 
 pub fn parse_log_signature(notification: &Value) -> Option<String> {
@@ -311,10 +362,17 @@ mod tests {
             &[9, 0, 0, 0, 0, 0, 0, 0],
         );
 
-        let tx = parse_transaction(&raw, "test_sig", "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8")
-            .unwrap();
+        let tx = parse_transaction(
+            &raw,
+            "test_sig",
+            "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+        )
+        .unwrap();
         assert_eq!(tx.signature, "test_sig");
-        assert_eq!(tx.program_id, "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+        assert_eq!(
+            tx.program_id,
+            "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
+        );
         assert_eq!(tx.block_slot, 281234567);
         assert!(tx.success);
         assert_eq!(tx.fee_lamports, 5000);
@@ -356,16 +414,14 @@ mod tests {
     #[test]
     fn classify_spl_token_set_authority() {
         // SetAuthority: tag=6, authority_type=2, option=0 (no new authority)
-        let raw = build_raw_with_ix(
-            vec!["mint", SPL_TOKEN_PROGRAM],
-            1,
-            vec![0],
-            &[6, 2, 0],
-        );
+        let raw = build_raw_with_ix(vec!["mint", SPL_TOKEN_PROGRAM], 1, vec![0], &[6, 2, 0]);
 
         let tx = parse_transaction(&raw, "sig", "any_target").unwrap();
         assert_eq!(tx.instructions.len(), 1);
-        assert!(matches!(tx.instructions[0].kind, InstructionKind::SetAuthority));
+        assert!(matches!(
+            tx.instructions[0].kind,
+            InstructionKind::SetAuthority
+        ));
         assert_eq!(tx.instruction_type.as_deref(), Some("setAuthority"));
     }
 
@@ -376,12 +432,7 @@ mod tests {
         let mut data = vec![3u8];
         data.extend_from_slice(&amount.to_le_bytes());
 
-        let raw = build_raw_with_ix(
-            vec!["src", "dst", SPL_TOKEN_PROGRAM],
-            2,
-            vec![0, 1],
-            &data,
-        );
+        let raw = build_raw_with_ix(vec!["src", "dst", SPL_TOKEN_PROGRAM], 2, vec![0, 1], &data);
 
         let tx = parse_transaction(&raw, "sig", "any_target").unwrap();
         assert_eq!(tx.instructions.len(), 1);
@@ -390,7 +441,10 @@ mod tests {
             other => panic!("expected TokenTransfer, got {:?}", other),
         }
         // Source/destination should be resolved as the first two account pubkeys
-        assert_eq!(tx.instructions[0].accounts, vec!["src".to_string(), "dst".to_string()]);
+        assert_eq!(
+            tx.instructions[0].accounts,
+            vec!["src".to_string(), "dst".to_string()]
+        );
     }
 
     #[test]
@@ -411,7 +465,10 @@ mod tests {
         let tx = parse_transaction(&raw, "sig", "any_target").unwrap();
         assert_eq!(tx.instructions.len(), 1);
         match &tx.instructions[0].kind {
-            InstructionKind::TokenTransferChecked { amount: a, decimals: d } => {
+            InstructionKind::TokenTransferChecked {
+                amount: a,
+                decimals: d,
+            } => {
                 assert_eq!(*a, amount);
                 assert_eq!(*d, 6);
             }
@@ -423,12 +480,7 @@ mod tests {
     fn classify_bpf_loader_upgradeable_upgrade() {
         // Upgrade: u32 LE = 3
         let data = [3u8, 0, 0, 0];
-        let raw = build_raw_with_ix(
-            vec!["payer", BPF_LOADER_UPGRADEABLE],
-            1,
-            vec![0],
-            &data,
-        );
+        let raw = build_raw_with_ix(vec!["payer", BPF_LOADER_UPGRADEABLE], 1, vec![0], &data);
 
         let tx = parse_transaction(&raw, "sig", "any_target").unwrap();
         assert_eq!(tx.instructions.len(), 1);
@@ -507,11 +559,18 @@ mod tests {
             }
         });
 
-        let tx = parse_transaction(&raw, "sig", "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8").unwrap();
+        let tx =
+            parse_transaction(&raw, "sig", "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8").unwrap();
         assert_eq!(tx.instructions.len(), 2);
         // First the top-level swap
-        assert!(matches!(tx.instructions[0].kind, InstructionKind::Other { .. }));
+        assert!(matches!(
+            tx.instructions[0].kind,
+            InstructionKind::Other { .. }
+        ));
         // Then the inner Token transfer
-        assert!(matches!(tx.instructions[1].kind, InstructionKind::TokenTransfer { .. }));
+        assert!(matches!(
+            tx.instructions[1].kind,
+            InstructionKind::TokenTransfer { .. }
+        ));
     }
 }

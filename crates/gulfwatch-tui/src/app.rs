@@ -32,6 +32,8 @@ pub struct App {
     pub view: View,
     /// Max transactions to keep in the feed.
     max_feed_size: usize,
+    /// Vertical scroll offset for detail views.
+    pub detail_scroll: u16,
 }
 
 impl App {
@@ -49,6 +51,7 @@ impl App {
             selected: 0,
             view: View::Dashboard,
             max_feed_size: 500,
+            detail_scroll: 0,
         }
     }
 
@@ -87,18 +90,30 @@ impl App {
     }
 
     pub fn prev_panel(&mut self) {
-        self.active_panel = if self.active_panel == 0 { 2 } else { self.active_panel - 1 };
+        self.active_panel = if self.active_panel == 0 {
+            2
+        } else {
+            self.active_panel - 1
+        };
         self.selected = 0;
     }
 
     pub fn scroll_up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        if matches!(self.view, View::Dashboard) {
+            self.selected = self.selected.saturating_sub(1);
+        } else {
+            self.detail_scroll = self.detail_scroll.saturating_sub(1);
+        }
     }
 
     pub fn scroll_down(&mut self) {
-        let max = self.list_len().saturating_sub(1);
-        if self.selected < max {
-            self.selected += 1;
+        if matches!(self.view, View::Dashboard) {
+            let max = self.list_len().saturating_sub(1);
+            if self.selected < max {
+                self.selected += 1;
+            }
+        } else {
+            self.detail_scroll = self.detail_scroll.saturating_add(1);
         }
     }
 
@@ -110,11 +125,13 @@ impl App {
             0 => {
                 if let Some(tx) = self.transactions.get(self.selected) {
                     self.view = View::TransactionDetail(Box::new(tx.clone()));
+                    self.detail_scroll = 0;
                 }
             }
             2 => {
                 if let Some(alert) = self.alerts.get(self.selected) {
                     self.view = View::AlertDetail(Box::new(alert.clone()));
+                    self.detail_scroll = 0;
                 }
             }
             _ => {}
@@ -124,6 +141,7 @@ impl App {
     /// Go back to dashboard view.
     pub fn close_detail(&mut self) {
         self.view = View::Dashboard;
+        self.detail_scroll = 0;
     }
 
     /// Number of items in the currently active panel's list.
@@ -133,5 +151,64 @@ impl App {
             2 => self.alerts.len(),
             _ => 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use gulfwatch_core::transaction::Transaction;
+
+    fn make_tx() -> Transaction {
+        Transaction {
+            signature: "sig".to_string(),
+            program_id: "prog".to_string(),
+            block_slot: 1,
+            timestamp: Utc::now(),
+            success: true,
+            instruction_type: Some("transfer".to_string()),
+            accounts: vec!["a".to_string(), "b".to_string()],
+            fee_lamports: 5000,
+            compute_units: 1234,
+            instructions: vec![],
+            cu_profile: None,
+            classification: None,
+            classification_debug: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn detail_scroll_moves_only_in_detail_view() {
+        let (state, _rx) = AppState::new(16, 10);
+        let mut app = App::new(state);
+        app.transactions.push(make_tx());
+
+        app.scroll_down();
+        assert_eq!(app.detail_scroll, 0);
+
+        app.open_detail();
+        app.scroll_down();
+        app.scroll_down();
+        assert_eq!(app.detail_scroll, 2);
+
+        app.close_detail();
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn opening_detail_resets_scroll() {
+        let (state, _rx) = AppState::new(16, 10);
+        let mut app = App::new(state);
+        app.transactions.push(make_tx());
+
+        app.open_detail();
+        app.scroll_down();
+        app.scroll_down();
+        assert_eq!(app.detail_scroll, 2);
+
+        app.close_detail();
+        app.open_detail();
+        assert_eq!(app.detail_scroll, 0);
     }
 }

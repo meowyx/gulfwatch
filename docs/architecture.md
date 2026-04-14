@@ -1,6 +1,6 @@
 # Architecture
 
-> **TL;DR:** GulfWatch streams live Solana transactions for any program you point it at, decodes every instruction inside them, and runs three security detections that fire alerts when something looks like an exploit in progress. All in-memory, single binary per role, no database, sub-second latency from on-chain event to alert.
+> **TL;DR:** GulfWatch streams live Solana transactions for any program you point it at, decodes every instruction inside them, classifies the full transaction semantics (`swap`, `bridge_out`, `nft_send`, etc.), and runs security detections that fire alerts when something looks like an exploit in progress. All in-memory, single binary per role, no database, sub-second latency from on-chain event to alert.
 
 ## The problem this solves
 
@@ -24,6 +24,7 @@ flowchart TD
 
     subgraph Core [gulfwatch-core]
         Worker[run_processing_worker]
+        TxClass[gulfwatch-classification<br/>semantic tx classification]
         Detections{Three detections<br/>pattern-match instructions}
         Window[(Rolling window<br/>per program)]
         Broadcast[[tokio::broadcast]]
@@ -39,6 +40,7 @@ flowchart TD
     WS --> Fetch
     Fetch --> Parser
     Parser -->|Transaction| Worker
+    Worker --> TxClass
     Worker --> Window
     Worker --> Detections
     Detections -->|AlertEvent| Broadcast
@@ -49,24 +51,35 @@ flowchart TD
 
 If you only read one thing in this doc, read the diagram. Everything else is detail. For the per-instruction classification logic inside the parser, see [`classification.md`](classification.md); it has its own diagram drawn at the right level of detail.
 
-## The four crates
+## The five crates
 
-GulfWatch is a Cargo workspace with four crates. Each one has a single sharp responsibility — when something breaks, you know which crate to open.
+GulfWatch is a Cargo workspace with five crates. Each one has a single sharp responsibility — when something breaks, you know which crate to open.
 
-### `gulfwatch-core`: the brain
+### `gulfwatch-classification`: transaction type engine
+
+Lives at `crates/gulfwatch-classification/`. Converts parsed instructions into high-level transaction categories (for example `defi_swap`, `bridge_out`, `nft_send`, `stake_withdraw`) and emits an explainable debug trace (classifier decisions + derived transfer legs).
+
+| Module | What it does |
+|---|---|
+| `lib.rs` | Classifier chain, derived feature/leg builder, and classification output model. |
+| `program_ids/` | Local program-ID registry used by classifier heuristics (bridge, privacy, nft, stake, memo, dex hints). |
+
+**Why this is a separate crate:** it keeps transaction semantics and classifier evolution independent from ingest transport and from detection logic.
+
+### `gulfwatch-core`: the orchestration brain
 
 Lives at `crates/gulfwatch-core/`. Contains every type and every algorithm that doesn't touch the network. Pure data-in / data-out.
 
 | Module | What it does |
 |---|---|
 | `transaction.rs` | The `Transaction`, `ParsedInstruction`, and `InstructionKind` types. The data model for a parsed Solana transaction. |
-| `pipeline.rs` | `AppState` (shared state for all consumers), `WorkerHandle`, and `run_processing_worker` — the loop that runs detections and broadcasts events. |
+| `pipeline.rs` | `AppState` (shared state for all consumers), `WorkerHandle`, and `run_processing_worker` — the loop that enriches tx classification, runs detections, and broadcasts events. |
 | `rolling_window.rs` | Per-program ring buffer of recent transactions, used for time-bucketed metric aggregation. |
 | `metrics.rs` | The `MetricSummary` shape returned by the REST API. |
 | `alert.rs` | `AlertRule`, `AlertEvent`, and the threshold-based `AlertEngine` (separate from the detection trait, it handles classic metric-based alerts like "error rate > 10%"). |
 | `detections/` | The three Phase 1 security detections (`authority_change`, `failed_tx_cluster`, `large_transfer`) plus the `Detection` trait they all implement. |
 
-**Why this is a separate crate:** the core has zero I/O. No HTTP, no WebSocket, no Solana RPC. Every test in `gulfwatch-core` runs in milliseconds with no network — 41 unit tests live here, and they execute in well under a second.
+**Why this is a separate crate:** the core has zero I/O. No HTTP, no WebSocket, no Solana RPC. Every test in `gulfwatch-core` runs in milliseconds with no network.
 
 ### `gulfwatch-ingest`: the eyes
 
@@ -110,8 +123,9 @@ If diagrams aren't your thing, here's the same story in five sentences:
 1. **Subscribe.** GulfWatch opens a WebSocket connection to a Solana RPC endpoint and subscribes to logs mentioning the monitored program (e.g. Raydium AMM v4). The subscription stays open for the life of the process.
 2. **Fetch.** When Solana sends a notification ("transaction X mentioned your program"), we immediately call `getTransaction` over HTTP to fetch the full transaction details, accounts, instructions, success/failure, fees, compute units.
 3. **Parse.** The parser walks every instruction in the transaction, **both top-level and inner CPIs**, and classifies each one into a typed enum (`SetAuthority`, `TokenTransfer { amount }`, `Other { name }`, etc.). The output is a `Transaction` struct with a `Vec<ParsedInstruction>` ready for inspection.
-4. **Detect.** The processing worker runs each registered `Detection` against the parsed transaction. Each detection is a small struct that pattern-matches on the instruction list and returns `Option<AlertEvent>`.
-5. **Broadcast.** Anything a detection returns gets pushed onto a `tokio::broadcast` channel. Every connected consumer (TUI alert panel, WebSocket clients, webhook delivery task) sees it within milliseconds. The transaction itself also gets pushed into a rolling window for metric aggregation.
+4. **Classify transaction semantics.** The worker runs `gulfwatch-classification` to assign a high-level tx type and debug trace.
+5. **Detect.** The processing worker runs each registered `Detection` against the parsed transaction. Each detection is a small struct that pattern-matches on the instruction list and returns `Option<AlertEvent>`.
+6. **Broadcast.** Anything a detection returns gets pushed onto a `tokio::broadcast` channel. Every connected consumer (TUI alert panel, WebSocket clients, webhook delivery task) sees it within milliseconds. The transaction itself also gets pushed into a rolling window for metric aggregation.
 
 ## Key design decisions and why
 
@@ -170,6 +184,7 @@ Honest list. These are not bugs — they're scope choices for Phase 1.
 
 ## Where to read next
 
-- **[`classification.md`](classification.md)** — how a raw Solana transaction becomes a typed `ParsedInstruction`. Read this if you want to understand the parser, or if you want to add support for a new program.
+- **[`classification.md`](classification.md)** — how a raw Solana transaction becomes a typed `ParsedInstruction`.
+- **[`transaction-classification.md`](transaction-classification.md)** — how typed instructions become high-level tx categories and debug traces.
 - **[`detections.md`](detections.md)** — the three Phase 1 security rules: what they fire on, why they matter, and how to configure them.
 - **[Root `README.md`](../README.md)** — install instructions, environment variables, and the REST + WebSocket API contract that the frontend talks to.

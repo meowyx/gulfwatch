@@ -3,8 +3,10 @@ use gulfwatch_core::cu_attribution::NATIVE_PROGRAM_CU;
 use gulfwatch_core::transaction::Transaction;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-              ScrollbarState, Table, Wrap},
+    widgets::{
+        Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Table, Wrap,
+    },
 };
 
 use crate::app::{App, View};
@@ -21,8 +23,8 @@ const SELECTED_BG: Color = Color::Rgb(30, 40, 60);
 pub fn draw(f: &mut Frame, app: &App) {
     match &app.view {
         View::Dashboard => draw_dashboard(f, app),
-        View::TransactionDetail(tx) => draw_tx_detail(f, tx),
-        View::AlertDetail(alert) => draw_alert_detail(f, alert),
+        View::TransactionDetail(tx) => draw_tx_detail(f, app, tx),
+        View::AlertDetail(alert) => draw_alert_detail(f, app, alert),
     }
 }
 
@@ -48,7 +50,10 @@ fn draw_header(f: &mut Frame, area: Rect) {
         Span::styled(" GULF", Style::default().fg(Color::Cyan).bold()),
         Span::styled("WATCH ", Style::default().fg(Color::White).bold()),
         Span::styled("│ ", Style::default().fg(DIM_COLOR)),
-        Span::styled("Solana Program Observability", Style::default().fg(DIM_COLOR)),
+        Span::styled(
+            "Solana Program Observability",
+            Style::default().fg(DIM_COLOR),
+        ),
     ]))
     .block(
         Block::default()
@@ -76,7 +81,11 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
 
 fn panel_border<'a>(title: &'a str, panel_idx: usize, app: &'a App) -> Block<'a> {
     let is_active = app.active_panel == panel_idx;
-    let border_color = if is_active { ACTIVE_BORDER } else { INACTIVE_BORDER };
+    let border_color = if is_active {
+        ACTIVE_BORDER
+    } else {
+        INACTIVE_BORDER
+    };
 
     Block::default()
         .title(Line::from(vec![Span::styled(
@@ -144,13 +153,29 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
             };
 
             let time = tx.timestamp.format("%H:%M:%S").to_string();
+            let tx_type = tx
+                .classification
+                .as_ref()
+                .and_then(|c| {
+                    if c.classifier == "fallback" {
+                        tx.instruction_type.clone().or_else(|| {
+                            if c.category == "other" {
+                                None
+                            } else {
+                                Some(c.category.clone())
+                            }
+                        })
+                    } else {
+                        Some(c.classifier.clone())
+                    }
+                })
+                .or_else(|| tx.instruction_type.clone())
+                .unwrap_or_else(|| "—".to_string());
 
             let mut row = Row::new(vec![
                 Cell::from(sig_short),
                 Cell::from(if tx.success { "✓" } else { "✗" }).style(status_style),
-                Cell::from(
-                    tx.instruction_type.as_deref().unwrap_or("—").to_string(),
-                ),
+                Cell::from(tx_type),
                 Cell::from(format_cu(tx.compute_units)),
                 Cell::from(format!("{}◎", tx.fee_lamports)),
                 Cell::from(time).style(Style::default().fg(DIM_COLOR)),
@@ -178,8 +203,8 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
 
     // Scrollbar
     if is_active && app.transactions.len() > visible_rows {
-        let mut scrollbar_state = ScrollbarState::new(app.transactions.len())
-            .position(app.selected);
+        let mut scrollbar_state =
+            ScrollbarState::new(app.transactions.len()).position(app.selected);
         f.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             area,
@@ -238,7 +263,10 @@ fn draw_metrics(f: &mut Frame, area: Rect, app: &App) {
 
             lines.push(Line::from(vec![
                 Span::styled("  Transactions: ", Style::default().fg(DIM_COLOR)),
-                Span::styled(format!("{}", summary.tx_count), Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{}", summary.tx_count),
+                    Style::default().fg(Color::White),
+                ),
             ]));
 
             let err_color = if summary.error_rate > 0.1 {
@@ -251,13 +279,22 @@ fn draw_metrics(f: &mut Frame, area: Rect, app: &App) {
 
             lines.push(Line::from(vec![
                 Span::styled("  Error Rate:   ", Style::default().fg(DIM_COLOR)),
-                Span::styled(format!("{:.1}%", summary.error_rate * 100.0), Style::default().fg(err_color)),
-                Span::styled(format!(" ({} errors)", summary.error_count), Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    format!("{:.1}%", summary.error_rate * 100.0),
+                    Style::default().fg(err_color),
+                ),
+                Span::styled(
+                    format!(" ({} errors)", summary.error_count),
+                    Style::default().fg(DIM_COLOR),
+                ),
             ]));
 
             lines.push(Line::from(vec![
                 Span::styled("  Avg CU:       ", Style::default().fg(DIM_COLOR)),
-                Span::styled(format_cu(summary.avg_compute_units as u64), Style::default().fg(Color::White)),
+                Span::styled(
+                    format_cu(summary.avg_compute_units as u64),
+                    Style::default().fg(Color::White),
+                ),
             ]));
 
             if !summary.top_instructions.is_empty() {
@@ -267,7 +304,10 @@ fn draw_metrics(f: &mut Frame, area: Rect, app: &App) {
                 )));
                 for instr in summary.top_instructions.iter().take(5) {
                     lines.push(Line::from(vec![
-                        Span::styled(format!("    {} ", instr.instruction_type), Style::default().fg(Color::White)),
+                        Span::styled(
+                            format!("    {} ", instr.instruction_type),
+                            Style::default().fg(Color::White),
+                        ),
                         Span::styled(format!("({})", instr.count), Style::default().fg(DIM_COLOR)),
                     ]));
                 }
@@ -354,10 +394,17 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         Span::styled("│ ", Style::default().fg(DIM_COLOR)),
         Span::styled(format!("{} ", active), Style::default().fg(Color::White)),
         Span::styled("│ ", Style::default().fg(DIM_COLOR)),
-        Span::styled(format!("{} txs ", app.transactions.len()), Style::default().fg(Color::White)),
+        Span::styled(
+            format!("{} txs ", app.transactions.len()),
+            Style::default().fg(Color::White),
+        ),
         Span::styled(
             format!("{} alerts", app.alerts.len()),
-            Style::default().fg(if app.alerts.is_empty() { DIM_COLOR } else { ALERT_COLOR }),
+            Style::default().fg(if app.alerts.is_empty() {
+                DIM_COLOR
+            } else {
+                ALERT_COLOR
+            }),
         ),
     ]))
     .style(Style::default().bg(Color::DarkGray));
@@ -367,7 +414,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
 // ─── Transaction Detail View ─────────────────────────────
 
-fn draw_tx_detail(f: &mut Frame, tx: &Transaction) {
+fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -380,17 +427,26 @@ fn draw_tx_detail(f: &mut Frame, tx: &Transaction) {
     draw_header(f, chunks[0]);
 
     let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(" Transaction Detail ", Style::default().fg(ACTIVE_BORDER).bold()),
-        ]))
+        .title(Line::from(vec![Span::styled(
+            " Transaction Detail ",
+            Style::default().fg(ACTIVE_BORDER).bold(),
+        )]))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACTIVE_BORDER));
 
     let inner = block.inner(chunks[1]);
     f.render_widget(block, chunks[1]);
 
-    let status_text = if tx.success { "Success ✓" } else { "Failed ✗" };
-    let status_color = if tx.success { SUCCESS_COLOR } else { ERROR_COLOR };
+    let status_text = if tx.success {
+        "Success ✓"
+    } else {
+        "Failed ✗"
+    };
+    let status_color = if tx.success {
+        SUCCESS_COLOR
+    } else {
+        ERROR_COLOR
+    };
 
     let mut lines = vec![
         Line::from(""),
@@ -411,7 +467,10 @@ fn draw_tx_detail(f: &mut Frame, tx: &Transaction) {
         Line::from(""),
         Line::from(vec![
             Span::styled("  Block Slot:   ", Style::default().fg(DIM_COLOR)),
-            Span::styled(format!("{}", tx.block_slot), Style::default().fg(Color::White)),
+            Span::styled(
+                format!("{}", tx.block_slot),
+                Style::default().fg(Color::White),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Timestamp:    ", Style::default().fg(DIM_COLOR)),
@@ -438,7 +497,11 @@ fn draw_tx_detail(f: &mut Frame, tx: &Transaction) {
         Line::from(vec![
             Span::styled("  Fee:          ", Style::default().fg(DIM_COLOR)),
             Span::styled(
-                format!("{} lamports ({:.6} SOL)", tx.fee_lamports, tx.fee_lamports as f64 / 1_000_000_000.0),
+                format!(
+                    "{} lamports ({:.6} SOL)",
+                    tx.fee_lamports,
+                    tx.fee_lamports as f64 / 1_000_000_000.0
+                ),
                 Style::default().fg(Color::White),
             ),
         ]),
@@ -459,7 +522,165 @@ fn draw_tx_detail(f: &mut Frame, tx: &Transaction) {
         ]));
     }
 
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  Parsed Instructions ({}):", tx.instructions.len()),
+        Style::default().fg(DIM_COLOR),
+    )));
+    for (i, ix) in tx.instructions.iter().enumerate() {
+        let kind = ix.display_name().unwrap_or("unknown");
+        lines.push(Line::from(vec![
+            Span::styled(format!("    [{:>2}] ", i), Style::default().fg(DIM_COLOR)),
+            Span::styled(kind, Style::default().fg(HEADER_COLOR)),
+            Span::styled("  ", Style::default().fg(DIM_COLOR)),
+            Span::styled(ix.program_id.as_str(), Style::default().fg(Color::White)),
+        ]));
+
+        if !ix.accounts.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("         accounts: ", Style::default().fg(DIM_COLOR)),
+                Span::styled(ix.accounts.join(", "), Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Classification:",
+        Style::default().fg(DIM_COLOR),
+    )));
+    match &tx.classification {
+        Some(classification) => {
+            lines.push(Line::from(vec![
+                Span::styled("    category: ", Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    classification.category.as_str(),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("    classifier: ", Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    classification.classifier.as_str(),
+                    Style::default().fg(HEADER_COLOR),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("    confidence: ", Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    format!("{:.2}", classification.confidence),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("    summary: ", Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    classification.summary.as_str(),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+        }
+        None => {
+            lines.push(Line::from(vec![
+                Span::styled("    headline type: ", Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    tx.instruction_type.as_deref().unwrap_or("unknown"),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+        }
+    }
+
+    if let Some(trace) = &tx.classification_debug {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  Classification Debug ({} decisions):",
+                trace.decisions.len()
+            ),
+            Style::default().fg(DIM_COLOR),
+        )));
+
+        for decision in trace.decisions.iter().take(12) {
+            let status = if decision.matched { "match" } else { "skip" };
+            let status_color = if decision.matched {
+                SUCCESS_COLOR
+            } else {
+                DIM_COLOR
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default().fg(DIM_COLOR)),
+                Span::styled(status, Style::default().fg(status_color).bold()),
+                Span::styled("  ", Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    decision.classifier.as_str(),
+                    Style::default().fg(HEADER_COLOR),
+                ),
+                Span::styled("  ", Style::default().fg(DIM_COLOR)),
+                Span::styled(decision.reason.as_str(), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  Derived Legs ({}):", trace.legs.len()),
+            Style::default().fg(DIM_COLOR),
+        )));
+
+        for leg in trace.legs.iter().take(20) {
+            lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "    [ix {:>2}] {:<15} amt={} dec={:?} dir={:?}",
+                    leg.instruction_index,
+                    leg.instruction_kind,
+                    leg.amount,
+                    leg.decimals,
+                    leg.direction
+                ),
+                Style::default().fg(Color::White),
+            )]));
+            lines.push(Line::from(vec![
+                Span::styled("         ", Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    format!("{} -> {} ({})", leg.source, leg.destination, leg.asset_hint),
+                    Style::default().fg(HEADER_COLOR),
+                ),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Raw Transaction JSON:",
+        Style::default().fg(DIM_COLOR),
+    )));
+    match serde_json::to_string_pretty(tx) {
+        Ok(raw) => {
+            for raw_line in raw.lines() {
+                lines.push(Line::from(vec![
+                    Span::styled("    ", Style::default().fg(DIM_COLOR)),
+                    Span::styled(raw_line.to_string(), Style::default().fg(Color::White)),
+                ]));
+            }
+        }
+        Err(_) => {
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default().fg(DIM_COLOR)),
+                Span::styled(
+                    "<failed to serialize transaction>",
+                    Style::default().fg(ERROR_COLOR),
+                ),
+            ]));
+        }
+    }
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.detail_scroll, 0)),
+        inner,
+    );
 
     // Status bar
     let bar = Paragraph::new(Line::from(vec![
@@ -474,7 +695,7 @@ fn draw_tx_detail(f: &mut Frame, tx: &Transaction) {
 
 // ─── Alert Detail View ───────────────────────────────────
 
-fn draw_alert_detail(f: &mut Frame, alert: &AlertEvent) {
+fn draw_alert_detail(f: &mut Frame, app: &App, alert: &AlertEvent) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -487,9 +708,10 @@ fn draw_alert_detail(f: &mut Frame, alert: &AlertEvent) {
     draw_header(f, chunks[0]);
 
     let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(" Alert Detail ", Style::default().fg(ALERT_COLOR).bold()),
-        ]))
+        .title(Line::from(vec![Span::styled(
+            " Alert Detail ",
+            Style::default().fg(ALERT_COLOR).bold(),
+        )]))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ALERT_COLOR));
 
@@ -518,11 +740,17 @@ fn draw_alert_detail(f: &mut Frame, alert: &AlertEvent) {
         ]),
         Line::from(vec![
             Span::styled("  Value:     ", Style::default().fg(DIM_COLOR)),
-            Span::styled(format!("{:.4}", alert.value), Style::default().fg(ERROR_COLOR)),
+            Span::styled(
+                format!("{:.4}", alert.value),
+                Style::default().fg(ERROR_COLOR),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Threshold: ", Style::default().fg(DIM_COLOR)),
-            Span::styled(format!("{}", alert.threshold), Style::default().fg(Color::White)),
+            Span::styled(
+                format!("{}", alert.threshold),
+                Style::default().fg(Color::White),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -534,7 +762,7 @@ fn draw_alert_detail(f: &mut Frame, alert: &AlertEvent) {
         ]),
     ];
 
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(Paragraph::new(lines).scroll((app.detail_scroll, 0)), inner);
 
     let bar = Paragraph::new(Line::from(vec![
         Span::styled(" Esc", Style::default().fg(HEADER_COLOR).bold()),
@@ -564,7 +792,10 @@ fn cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("  CU Profile:  ", Style::default().fg(DIM_COLOR)),
-                    Span::styled("unavailable (no log messages)", Style::default().fg(DIM_COLOR)),
+                    Span::styled(
+                        "unavailable (no log messages)",
+                        Style::default().fg(DIM_COLOR),
+                    ),
                 ]),
             ];
         }
@@ -642,36 +873,38 @@ fn cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
 
         lines.push(Line::from(vec![
             Span::styled(format!("    [{:>2}] ", idx), Style::default().fg(DIM_COLOR)),
-            Span::styled(format!("{:>10} CU  ", format_cu_full(cu)), Style::default().fg(row_color)),
+            Span::styled(
+                format!("{:>10} CU  ", format_cu_full(cu)),
+                Style::default().fg(row_color),
+            ),
             Span::styled(bar, Style::default().fg(HEADER_COLOR)),
             Span::styled(format!("  {:>5.1}%  ", pct), Style::default().fg(DIM_COLOR)),
-            Span::styled(format!("{}{}", pid_short, tags), Style::default().fg(row_color)),
+            Span::styled(
+                format!("{}{}", pid_short, tags),
+                Style::default().fg(row_color),
+            ),
         ]));
     }
 
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!(
-                "    total: {} CU reconstructed / {} CU reported",
-                format_cu_full(profile.reconstructed_total),
-                format_cu_full(profile.reported_total),
-            ),
-            Style::default().fg(DIM_COLOR),
+    lines.push(Line::from(vec![Span::styled(
+        format!(
+            "    total: {} CU reconstructed / {} CU reported",
+            format_cu_full(profile.reconstructed_total),
+            format_cu_full(profile.reported_total),
         ),
-    ]));
+        Style::default().fg(DIM_COLOR),
+    )]));
 
     if profile.native_overhead_cu > 0 {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(
-                    "    native program overhead: {} CU ({} × {} CU)",
-                    profile.native_overhead_cu,
-                    profile.native_overhead_cu / NATIVE_PROGRAM_CU,
-                    NATIVE_PROGRAM_CU,
-                ),
-                Style::default().fg(DIM_COLOR),
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "    native program overhead: {} CU ({} × {} CU)",
+                profile.native_overhead_cu,
+                profile.native_overhead_cu / NATIVE_PROGRAM_CU,
+                NATIVE_PROGRAM_CU,
             ),
-        ]));
+            Style::default().fg(DIM_COLOR),
+        )]));
     }
 
     lines

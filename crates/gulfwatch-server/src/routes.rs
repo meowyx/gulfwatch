@@ -134,6 +134,48 @@ pub fn transaction_routes() -> Router<AppState> {
 struct TransactionsQuery {
     program: Option<String>,
     limit: Option<usize>,
+    category: Option<String>,
+    classifier: Option<String>,
+    min_confidence: Option<f32>,
+    has_debug: Option<bool>,
+}
+
+fn tx_matches_filters(tx: &gulfwatch_core::Transaction, query: &TransactionsQuery) -> bool {
+    if let Some(category) = query.category.as_deref() {
+        let Some(classification) = &tx.classification else {
+            return false;
+        };
+        if classification.category != category {
+            return false;
+        }
+    }
+
+    if let Some(classifier) = query.classifier.as_deref() {
+        let Some(classification) = &tx.classification else {
+            return false;
+        };
+        if classification.classifier != classifier {
+            return false;
+        }
+    }
+
+    if let Some(min_confidence) = query.min_confidence {
+        let Some(classification) = &tx.classification else {
+            return false;
+        };
+        if classification.confidence < min_confidence {
+            return false;
+        }
+    }
+
+    if let Some(has_debug) = query.has_debug {
+        let present = tx.classification_debug.is_some();
+        if present != has_debug {
+            return false;
+        }
+    }
+
+    true
 }
 
 async fn recent_transactions(
@@ -146,7 +188,13 @@ async fn recent_transactions(
     match query.program {
         Some(ref program_id) => {
             if let Some(window) = windows.get(program_id) {
-                Json(serde_json::to_value(window.recent(limit)).unwrap())
+                let txs: Vec<_> = window
+                    .recent(limit.saturating_mul(4))
+                    .into_iter()
+                    .filter(|tx| tx_matches_filters(tx, &query))
+                    .take(limit)
+                    .collect();
+                Json(serde_json::to_value(txs).unwrap())
             } else {
                 Json(serde_json::json!([]))
             }
@@ -155,9 +203,10 @@ async fn recent_transactions(
             // Collect recent transactions from all windows, merge and sort
             let mut all_txs: Vec<_> = windows
                 .values()
-                .flat_map(|w| w.recent(limit))
+                .flat_map(|w| w.recent(limit.saturating_mul(4)))
                 .collect();
             all_txs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            all_txs.retain(|tx| tx_matches_filters(tx, &query));
             all_txs.truncate(limit);
             Json(serde_json::to_value(all_txs).unwrap())
         }
@@ -287,6 +336,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use gulfwatch_core::{ClassificationDebugTrace, TransactionClassification};
     use gulfwatch_core::Transaction;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
@@ -304,7 +354,33 @@ mod tests {
             compute_units: 200_000,
             instructions: vec![],
             cu_profile: None,
+            classification: None,
+            classification_debug: None,
         }
+    }
+
+    fn make_classified_tx(
+        program_id: &str,
+        category: &str,
+        classifier: &str,
+        confidence: f32,
+        has_debug: bool,
+    ) -> Transaction {
+        let mut tx = make_tx(program_id);
+        tx.classification = Some(TransactionClassification {
+            category: category.to_string(),
+            classifier: classifier.to_string(),
+            confidence,
+            summary: "test".to_string(),
+        });
+        if has_debug {
+            tx.classification_debug = Some(ClassificationDebugTrace {
+                focal_account: None,
+                decisions: vec![],
+                legs: vec![],
+            });
+        }
+        tx
     }
 
     #[tokio::test]
@@ -404,5 +480,37 @@ mod tests {
         let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.len(), 1);
         assert_eq!(json[0]["signature"], "test_sig");
+    }
+
+    #[tokio::test]
+    async fn recent_transactions_supports_classification_filters() {
+        let (state, _rx) = AppState::new(100, 10);
+        state.add_program("prog".to_string()).await;
+
+        {
+            let mut windows = state.windows.write().await;
+            let window = windows.get_mut("prog").unwrap();
+            window.push(make_classified_tx("prog", "defi_swap", "swap", 0.95, true));
+            window.push(make_classified_tx("prog", "token_transfer", "transfer", 0.80, false));
+        }
+
+        let app = crate::build_router(state);
+        let response = app
+            .oneshot(
+                Request::get(
+                    "/api/transactions/recent?program=prog&category=defi_swap&classifier=swap&min_confidence=0.9&has_debug=true",
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["classification"]["category"], "defi_swap");
+        assert_eq!(json[0]["classification"]["classifier"], "swap");
     }
 }

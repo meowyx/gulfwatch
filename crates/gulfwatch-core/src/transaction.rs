@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use gulfwatch_classification::{ClassificationDebugTrace, TransactionClassification};
 use serde::{Deserialize, Serialize};
 
 use crate::cu_attribution::CuProfile;
@@ -10,8 +11,11 @@ use crate::cu_attribution::CuProfile;
 pub enum InstructionKind {
     SetAuthority,
     Upgrade,
+    SystemTransfer { lamports: u64 },
     TokenTransfer { amount: u64 },
     TokenTransferChecked { amount: u64, decimals: u8 },
+    StakeDelegate,
+    StakeWithdraw,
     Other { name: String },
     Unknown,
 }
@@ -28,8 +32,11 @@ impl ParsedInstruction {
         match &self.kind {
             InstructionKind::SetAuthority => Some("setAuthority"),
             InstructionKind::Upgrade => Some("upgrade"),
+            InstructionKind::SystemTransfer { .. } => Some("systemTransfer"),
             InstructionKind::TokenTransfer { .. } => Some("transfer"),
             InstructionKind::TokenTransferChecked { .. } => Some("transferChecked"),
+            InstructionKind::StakeDelegate => Some("stakeDelegate"),
+            InstructionKind::StakeWithdraw => Some("stakeWithdraw"),
             InstructionKind::Other { name } => Some(name.as_str()),
             InstructionKind::Unknown => None,
         }
@@ -42,8 +49,11 @@ impl ParsedInstruction {
         match &self.kind {
             InstructionKind::SetAuthority => 100,
             InstructionKind::Upgrade => 99,
+            InstructionKind::StakeWithdraw => 80,
+            InstructionKind::StakeDelegate => 79,
             InstructionKind::TokenTransferChecked { .. } => 50,
             InstructionKind::TokenTransfer { .. } => 49,
+            InstructionKind::SystemTransfer { .. } => 48,
             InstructionKind::Other { .. } => 10,
             InstructionKind::Unknown => 0,
         }
@@ -65,6 +75,10 @@ pub struct Transaction {
     pub instructions: Vec<ParsedInstruction>,
     #[serde(default)]
     pub cu_profile: Option<CuProfile>,
+    #[serde(default)]
+    pub classification: Option<TransactionClassification>,
+    #[serde(default)]
+    pub classification_debug: Option<ClassificationDebugTrace>,
 }
 
 impl Transaction {
@@ -91,7 +105,12 @@ mod tests {
     #[test]
     fn headline_picks_set_authority_over_swap() {
         let instructions = vec![
-            ix("raydium", InstructionKind::Other { name: "swap".to_string() }),
+            ix(
+                "raydium",
+                InstructionKind::Other {
+                    name: "swap".to_string(),
+                },
+            ),
             ix("token", InstructionKind::SetAuthority),
         ];
         assert_eq!(
@@ -116,7 +135,13 @@ mod tests {
     fn headline_picks_transfer_checked_over_transfer() {
         let instructions = vec![
             ix("token", InstructionKind::TokenTransfer { amount: 100 }),
-            ix("token", InstructionKind::TokenTransferChecked { amount: 100, decimals: 6 }),
+            ix(
+                "token",
+                InstructionKind::TokenTransferChecked {
+                    amount: 100,
+                    decimals: 6,
+                },
+            ),
         ];
         assert_eq!(
             Transaction::derive_instruction_type(&instructions),
@@ -131,7 +156,12 @@ mod tests {
 
         let instructions = vec![
             ix("x", InstructionKind::Unknown),
-            ix("raydium", InstructionKind::Other { name: "swap".to_string() }),
+            ix(
+                "raydium",
+                InstructionKind::Other {
+                    name: "swap".to_string(),
+                },
+            ),
         ];
         assert_eq!(
             Transaction::derive_instruction_type(&instructions),

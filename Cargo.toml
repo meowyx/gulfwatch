@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/gulfwatch-core", "crates/gulfwatch-ingest", "crates/gulfwatch-server", "crates/gulfwatch-tui",
-   
+    "crates/gulfwatch-classification", "crates/gulfwatch-core", "crates/gulfwatch-ingest", "crates/gulfwatch-server", "crates/gulfwatch-tui",
+
 ]
 resolver = "2"

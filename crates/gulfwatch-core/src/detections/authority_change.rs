@@ -58,6 +58,8 @@ mod tests {
             compute_units: 200_000,
             instructions,
             cu_profile: None,
+            classification: None,
+            classification_debug: None,
         }
     }
 
