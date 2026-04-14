@@ -30,6 +30,7 @@ For the deep-dive on how each detection works, what it doesn't catch, and how to
 
 ```
 crates/
+  gulfwatch-classification/  # transaction semantic classifiers + debug trace
   gulfwatch-core/       # shared types, rolling window, metrics, alerts, pipeline
   gulfwatch-ingest/     # Solana WebSocket RPC client, transaction parsing
   gulfwatch-server/     # axum REST API + WebSocket + Prometheus (binary)
@@ -121,7 +122,7 @@ POST /api/programs                  { "program_id": "..." }
 DELETE /api/programs/{id}
 GET  /api/metrics/summary           ?program=...
 GET  /api/metrics/timeseries        ?program=...&interval=60
-GET  /api/transactions/recent       ?program=...&limit=50
+GET  /api/transactions/recent       ?program=...&limit=50&category=...&classifier=...&min_confidence=...&has_debug=true
 GET  /api/alerts
 POST /api/alerts                    { AlertRule JSON }
 PUT  /api/alerts/{id}
@@ -183,4 +184,5 @@ Deep-dive docs live in [`docs/`](docs/). Start with [`docs/README.md`](docs/READ
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | You want a mental model of the whole system before touching code |
 | [`docs/classification.md`](docs/classification.md) | You're debugging the parser, adding support for a new program, or trying to understand what the detections actually see |
+| [`docs/transaction-classification.md`](docs/transaction-classification.md) | You're debugging why a tx is labeled `swap` / `fallback`, tuning classifier behavior, or adding a classifier |
 | [`docs/detections.md`](docs/detections.md) | You're rendering alerts in a UI, evaluating detection coverage, or planning a new detection rule |

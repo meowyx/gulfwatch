@@ -159,6 +159,8 @@ mod tests {
             compute_units: 200_000,
             instructions: vec![],
             cu_profile: None,
+            classification: None,
+            classification_debug: None,
         }
     }
 
