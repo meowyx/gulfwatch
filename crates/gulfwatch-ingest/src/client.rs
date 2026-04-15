@@ -114,7 +114,6 @@ impl SolanaIngestClient {
         };
 
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let target = self.config.program_ids.first().map(|s| s.as_str()).unwrap_or("");
         let mut attempts = 0;
         loop {
             attempts += 1;
@@ -129,7 +128,7 @@ impl SolanaIngestClient {
                         break;
                     }
 
-                    match parser::parse_transaction(&raw, &signature, target) {
+                    match parser::parse_transaction(&raw, &signature, &self.config.program_ids) {
                         Some(tx) => {
                             if self.tx_sender.send(tx).await.is_err() {
                                 error!("mpsc channel closed, stopping ingest");

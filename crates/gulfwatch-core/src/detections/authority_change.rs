@@ -14,7 +14,7 @@ impl Detection for AuthorityChangeDetection {
 
     fn evaluate(&mut self, tx: &Transaction) -> Option<AlertEvent> {
         let trigger = tx.instructions.iter().find_map(|ix| match ix.kind {
-            InstructionKind::SetAuthority => Some("set_authority"),
+            InstructionKind::SetAuthority { .. } => Some("set_authority"),
             InstructionKind::Upgrade => Some("upgrade"),
             _ => None,
         })?;
@@ -66,7 +66,10 @@ mod tests {
     #[test]
     fn fires_on_set_authority() {
         let mut det = AuthorityChangeDetection;
-        let tx = tx_with(vec![ix("token", InstructionKind::SetAuthority)]);
+        let tx = tx_with(vec![ix(
+            "token",
+            InstructionKind::SetAuthority { authority_type: 0 },
+        )]);
 
         let event = det.evaluate(&tx).expect("should fire");
         assert_eq!(event.metric, "set_authority");
@@ -127,7 +130,7 @@ mod tests {
                     name: "swap".to_string(),
                 },
             ),
-            ix("token", InstructionKind::SetAuthority),
+            ix("token", InstructionKind::SetAuthority { authority_type: 0 }),
         ]);
 
         let event = det.evaluate(&tx).expect("should fire");

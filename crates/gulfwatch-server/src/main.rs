@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use gulfwatch_core::alert::AlertEngine;
 use gulfwatch_core::detections::{
-    AuthorityChangeDetection, Detection, FailedTxClusterDetection, LargeTransferDetection,
+    AuthorityChangeDetection, DefaultAccountStateFrozenDetection, Detection,
+    FailedTxClusterDetection, LargeTransferDetection, PermanentDelegateDetection,
+    TransferFeeAuthorityChangeDetection, TransferHookUpgradeDetection,
 };
 use gulfwatch_core::pipeline::{WorkerHandle, run_processing_worker};
 use gulfwatch_core::AppState;
@@ -71,6 +73,10 @@ async fn main() {
             watched_accounts,
             large_transfer_threshold,
         )),
+        Box::new(TransferHookUpgradeDetection),
+        Box::new(PermanentDelegateDetection),
+        Box::new(TransferFeeAuthorityChangeDetection),
+        Box::new(DefaultAccountStateFrozenDetection),
     ];
     tokio::spawn(run_processing_worker(worker_handle, ingest_rx, detections));
     tokio::spawn(async move { ingest_client.run().await });

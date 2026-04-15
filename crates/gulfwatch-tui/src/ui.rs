@@ -9,7 +9,9 @@ use ratatui::{
     },
 };
 
-use crate::app::{App, View};
+use crate::app::{
+    short_program_id, App, View, PANEL_ALERTS, PANEL_METRICS, PANEL_SIDEBAR, PANEL_TRANSACTIONS,
+};
 
 const ACTIVE_BORDER: Color = Color::Cyan;
 const INACTIVE_BORDER: Color = Color::DarkGray;
@@ -66,17 +68,114 @@ fn draw_header(f: &mut Frame, area: Rect) {
 fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .constraints([
+            Constraint::Length(24),
+            Constraint::Percentage(55),
+            Constraint::Min(30),
+        ])
         .split(area);
 
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(h_chunks[1]);
+        .split(h_chunks[2]);
 
-    draw_transactions(f, h_chunks[0], app);
+    draw_sidebar(f, h_chunks[0], app);
+    draw_transactions(f, h_chunks[1], app);
     draw_metrics(f, right_chunks[0], app);
     draw_alerts(f, right_chunks[1], app);
+}
+
+fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
+    let block = panel_border("Programs [0]", PANEL_SIDEBAR, app);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let is_active = app.active_panel == PANEL_SIDEBAR;
+    let mut lines: Vec<Line> = Vec::new();
+
+    let all_focused = app.selected_program.is_none();
+    let all_selected = is_active && app.selected == 0;
+    let all_count: usize = app.transactions.len();
+    let all_tag = if all_focused { "▸" } else { " " };
+    let all_style = if all_selected {
+        Style::default().bg(SELECTED_BG).fg(Color::White).bold()
+    } else if all_focused {
+        Style::default().fg(HEADER_COLOR).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+    lines.push(Line::styled(
+        format!(" {} All  {:>5}", all_tag, all_count),
+        all_style,
+    ));
+    lines.push(Line::styled(
+        "".to_string(),
+        Style::default().fg(DIM_COLOR),
+    ));
+
+    let windows = app.state.windows.try_read().ok();
+
+    for (i, pid) in app.programs.iter().enumerate() {
+        let row_idx = i + 1; // row 0 is All
+        let focused = app.selected_program == Some(i);
+        let selected = is_active && app.selected == row_idx;
+        let has_alert = app.program_has_recent_alert(pid);
+
+        let (tx_count, error_count) = match windows.as_ref().and_then(|w| w.get(pid)) {
+            Some(window) => {
+                let s = window.summary(pid);
+                (s.tx_count, s.error_count)
+            }
+            None => {
+                let count = app
+                    .transactions
+                    .iter()
+                    .filter(|t| &t.program_id == pid)
+                    .count() as u64;
+                (count, 0u64)
+            }
+        };
+
+        let cursor = if focused { "▸" } else { " " };
+        let flag = if has_alert { "⚑" } else { " " };
+        let flag_color = if has_alert { ALERT_COLOR } else { DIM_COLOR };
+
+        let row_style = if selected {
+            Style::default().bg(SELECTED_BG).fg(Color::White).bold()
+        } else if focused {
+            Style::default().fg(HEADER_COLOR).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {} ", cursor), row_style),
+            Span::styled(short_program_id(pid), row_style),
+            Span::styled(format!(" {:>4}", tx_count), row_style),
+            Span::styled(" ", row_style),
+            Span::styled(flag.to_string(), Style::default().fg(flag_color).bold()),
+        ]));
+
+        if error_count > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("     ", Style::default()),
+                Span::styled(
+                    format!("{} err", error_count),
+                    Style::default().fg(ERROR_COLOR),
+                ),
+            ]));
+        }
+    }
+
+    if app.programs.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " (none yet)",
+            Style::default().fg(DIM_COLOR),
+        )));
+    }
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn panel_border<'a>(title: &'a str, panel_idx: usize, app: &'a App) -> Block<'a> {
@@ -97,11 +196,14 @@ fn panel_border<'a>(title: &'a str, panel_idx: usize, app: &'a App) -> Block<'a>
 }
 
 fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
-    let block = panel_border("Transactions [1]", 0, app);
+    let title = scoped_title("Transactions [1]", app);
+    let block = panel_border(&title, PANEL_TRANSACTIONS, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if app.transactions.is_empty() {
+    let filtered: Vec<&Transaction> = app.filtered_transactions().collect();
+
+    if filtered.is_empty() {
         let msg = Paragraph::new("Waiting for transactions...")
             .style(Style::default().fg(DIM_COLOR))
             .alignment(Alignment::Center);
@@ -112,6 +214,7 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
     let header = Row::new(vec![
         Cell::from("Sig").style(Style::default().fg(HEADER_COLOR)),
         Cell::from("").style(Style::default().fg(HEADER_COLOR)),
+        Cell::from("Program").style(Style::default().fg(HEADER_COLOR)),
         Cell::from("Type").style(Style::default().fg(HEADER_COLOR)),
         Cell::from("CU").style(Style::default().fg(HEADER_COLOR)),
         Cell::from("Fee").style(Style::default().fg(HEADER_COLOR)),
@@ -119,7 +222,7 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
     ])
     .height(1);
 
-    let is_active = app.active_panel == 0;
+    let is_active = app.active_panel == PANEL_TRANSACTIONS;
     let visible_rows = inner.height.saturating_sub(1) as usize; // minus header
 
     // Ensure selected is visible by computing scroll offset
@@ -133,8 +236,7 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
         0
     };
 
-    let rows: Vec<Row> = app
-        .transactions
+    let rows: Vec<Row> = filtered
         .iter()
         .enumerate()
         .skip(scroll)
@@ -175,6 +277,8 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
             let mut row = Row::new(vec![
                 Cell::from(sig_short),
                 Cell::from(if tx.success { "✓" } else { "✗" }).style(status_style),
+                Cell::from(short_program_id(&tx.program_id))
+                    .style(Style::default().fg(HEADER_COLOR)),
                 Cell::from(tx_type),
                 Cell::from(format_cu(tx.compute_units)),
                 Cell::from(format!("{}◎", tx.fee_lamports)),
@@ -192,6 +296,7 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
     let widths = [
         Constraint::Length(12),
         Constraint::Length(2),
+        Constraint::Length(12),
         Constraint::Length(10),
         Constraint::Length(8),
         Constraint::Length(10),
@@ -202,9 +307,8 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(table, inner);
 
     // Scrollbar
-    if is_active && app.transactions.len() > visible_rows {
-        let mut scrollbar_state =
-            ScrollbarState::new(app.transactions.len()).position(app.selected);
+    if is_active && filtered.len() > visible_rows {
+        let mut scrollbar_state = ScrollbarState::new(filtered.len()).position(app.selected);
         f.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             area,
@@ -213,8 +317,16 @@ fn draw_transactions(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
+fn scoped_title(base: &str, app: &App) -> String {
+    match app.selected_program {
+        Some(_) => format!("{} [{}]", base, app.focused_program_label()),
+        None => base.to_string(),
+    }
+}
+
 fn draw_metrics(f: &mut Frame, area: Rect, app: &App) {
-    let block = panel_border("Metrics [2]", 1, app);
+    let title = scoped_title("Metrics [2]", app);
+    let block = panel_border(&title, PANEL_METRICS, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -229,12 +341,7 @@ fn draw_metrics(f: &mut Frame, area: Rect, app: &App) {
         }
     };
 
-    let programs = match app.state.monitored_programs.try_read() {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-
-    if programs.is_empty() {
+    if app.programs.is_empty() {
         f.render_widget(
             Paragraph::new("No programs monitored")
                 .style(Style::default().fg(DIM_COLOR))
@@ -244,9 +351,15 @@ fn draw_metrics(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
+    let focused = app.focused_program_id().map(|s| s.to_string());
+    let program_iter: Vec<&String> = match &focused {
+        Some(pid) => app.programs.iter().filter(|p| *p == pid).collect(),
+        None => app.programs.iter().collect(),
+    };
+
     let mut lines: Vec<Line> = Vec::new();
 
-    for pid in programs.iter() {
+    for pid in program_iter {
         if let Some(window) = windows.get(pid) {
             let summary = window.summary(pid);
 
@@ -317,22 +430,46 @@ fn draw_metrics(f: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    let visible = inner.height as usize;
+    let content_len = lines.len();
+    let max_scroll = content_len.saturating_sub(visible) as u16;
+    let scroll_offset = app.metrics_scroll.min(max_scroll);
+
+    let is_active = app.active_panel == PANEL_METRICS;
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_offset, 0)),
+        inner,
+    );
+
+    if is_active && content_len > visible {
+        let mut scrollbar_state =
+            ScrollbarState::new(content_len).position(scroll_offset as usize);
+        f.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            area,
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn draw_alerts(f: &mut Frame, area: Rect, app: &App) {
-    let count = app.alerts.len();
-    let title = if count > 0 {
+    let filtered: Vec<&AlertEvent> = app.filtered_alerts().collect();
+    let count = filtered.len();
+    let base = if count > 0 {
         format!("Alerts [3] ({})", count)
     } else {
         "Alerts [3]".to_string()
     };
+    let title = scoped_title(&base, app);
 
-    let block = panel_border(&title, 2, app);
+    let block = panel_border(&title, PANEL_ALERTS, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if app.alerts.is_empty() {
+    if filtered.is_empty() {
         f.render_widget(
             Paragraph::new("No alerts")
                 .style(Style::default().fg(DIM_COLOR))
@@ -342,7 +479,7 @@ fn draw_alerts(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let is_active = app.active_panel == 2;
+    let is_active = app.active_panel == PANEL_ALERTS;
     let visible_rows = inner.height as usize;
     let scroll = if is_active && app.selected >= visible_rows {
         app.selected - visible_rows + 1
@@ -350,8 +487,7 @@ fn draw_alerts(f: &mut Frame, area: Rect, app: &App) {
         0
     };
 
-    let lines: Vec<Line> = app
-        .alerts
+    let lines: Vec<Line> = filtered
         .iter()
         .enumerate()
         .skip(scroll)
@@ -365,7 +501,7 @@ fn draw_alerts(f: &mut Frame, area: Rect, app: &App) {
 
             Line::styled(
                 format!(
-                    " {} ⚠ {}  ({}: {:.2} > {})",
+                    " {} ⚑ {}  ({}: {:.2} > {})",
                     time, alert.rule_name, alert.metric, alert.value, alert.threshold
                 ),
                 style,
@@ -377,22 +513,30 @@ fn draw_alerts(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let panel_names = ["Transactions", "Metrics", "Alerts"];
+    let panel_names = ["Programs", "Transactions", "Metrics", "Alerts"];
     let active = panel_names[app.active_panel];
+    let focus_label = app.focused_program_label();
 
     let bar = Paragraph::new(Line::from(vec![
         Span::styled(" q", Style::default().fg(HEADER_COLOR).bold()),
         Span::styled(" quit  ", Style::default().fg(DIM_COLOR)),
         Span::styled("Tab", Style::default().fg(HEADER_COLOR).bold()),
         Span::styled(" switch  ", Style::default().fg(DIM_COLOR)),
-        Span::styled("↑↓", Style::default().fg(HEADER_COLOR).bold()),
-        Span::styled(" scroll  ", Style::default().fg(DIM_COLOR)),
+        Span::styled("1-9", Style::default().fg(HEADER_COLOR).bold()),
+        Span::styled(" program  ", Style::default().fg(DIM_COLOR)),
+        Span::styled("a", Style::default().fg(HEADER_COLOR).bold()),
+        Span::styled(" all  ", Style::default().fg(DIM_COLOR)),
         Span::styled("Enter", Style::default().fg(HEADER_COLOR).bold()),
         Span::styled(" detail  ", Style::default().fg(DIM_COLOR)),
         Span::styled("Esc", Style::default().fg(HEADER_COLOR).bold()),
         Span::styled(" back  ", Style::default().fg(DIM_COLOR)),
         Span::styled("│ ", Style::default().fg(DIM_COLOR)),
         Span::styled(format!("{} ", active), Style::default().fg(Color::White)),
+        Span::styled("│ focus ", Style::default().fg(DIM_COLOR)),
+        Span::styled(
+            format!("{} ", focus_label),
+            Style::default().fg(HEADER_COLOR),
+        ),
         Span::styled("│ ", Style::default().fg(DIM_COLOR)),
         Span::styled(
             format!("{} txs ", app.transactions.len()),

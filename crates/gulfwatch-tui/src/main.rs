@@ -12,7 +12,9 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use gulfwatch_core::detections::{
-    AuthorityChangeDetection, Detection, FailedTxClusterDetection, LargeTransferDetection,
+    AuthorityChangeDetection, DefaultAccountStateFrozenDetection, Detection,
+    FailedTxClusterDetection, LargeTransferDetection, PermanentDelegateDetection,
+    TransferFeeAuthorityChangeDetection, TransferHookUpgradeDetection,
 };
 use gulfwatch_core::pipeline::{run_processing_worker, WorkerHandle};
 use gulfwatch_core::AppState;
@@ -26,8 +28,20 @@ async fn main() -> io::Result<()> {
 
     let (state, ingest_rx) = AppState::new(1024, parse_rolling_window_minutes());
 
-    let program_id = require_env("MONITOR_PROGRAM");
-    state.add_program(program_id.clone()).await;
+    let programs_str = std::env::var("MONITOR_PROGRAMS")
+        .or_else(|_| std::env::var("MONITOR_PROGRAM"))
+        .expect("Set MONITOR_PROGRAM or MONITOR_PROGRAMS in .env");
+    let program_ids: Vec<String> = programs_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if program_ids.is_empty() {
+        panic!("MONITOR_PROGRAM(S) must contain at least one program id");
+    }
+    for pid in &program_ids {
+        state.add_program(pid.clone()).await;
+    }
 
     let worker_handle = WorkerHandle::from(&state);
     let watched_accounts = parse_watched_accounts();
@@ -39,6 +53,10 @@ async fn main() -> io::Result<()> {
             watched_accounts,
             large_transfer_threshold,
         )),
+        Box::new(TransferHookUpgradeDetection),
+        Box::new(PermanentDelegateDetection),
+        Box::new(TransferFeeAuthorityChangeDetection),
+        Box::new(DefaultAccountStateFrozenDetection),
     ];
     tokio::spawn(run_processing_worker(worker_handle, ingest_rx, detections));
 
@@ -48,7 +66,7 @@ async fn main() -> io::Result<()> {
     let ingest_config = IngestConfig {
         ws_url,
         rpc_url,
-        program_ids: vec![program_id],
+        program_ids,
         max_backoff_secs: 60,
     };
     let ingest_client = SolanaIngestClient::new(ingest_config, state.ingest_tx.clone());
@@ -111,9 +129,11 @@ async fn run_app(
                         KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
                         KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
                         KeyCode::Enter => app.open_detail(),
-                        KeyCode::Char('1') => { app.active_panel = 0; app.selected = 0; }
-                        KeyCode::Char('2') => { app.active_panel = 1; app.selected = 0; }
-                        KeyCode::Char('3') => { app.active_panel = 2; app.selected = 0; }
+                        KeyCode::Char(c @ '1'..='9') => {
+                            let idx = (c as usize) - ('1' as usize);
+                            app.select_program(Some(idx));
+                        }
+                        KeyCode::Char('a') => app.select_program(None),
                         _ => {}
                     }
                 }
