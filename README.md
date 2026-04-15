@@ -29,29 +29,26 @@ cp .env.example .env        # then fill in SOLANA_WS_URL, SOLANA_RPC_URL, MONITO
 cargo run -p gulfwatch-tui  # standalone TUI, no server needed
 ```
 
-That's it. Live transactions start streaming into the Programs sidebar. Press `1`-`9` to filter to a monitored program, `a` to return to "All", `Tab` to cycle panels, `Enter` on a transaction for the detail view.
+Once the TUI starts running, then live transactions start streaming into the Programs sidebar. Press arrow keys to filter to a monitored program, `Tab` to cycle panels, `Enter` on a transaction for the detail view.
 
 ## 🧭 The Problem
 
 The missing layer in Solana is not data access. It's **runtime understanding**.
 
-Teams can get raw chain data from RPC providers and browse after-the-fact from explorers, but the workflow between "something happened" and "I understand what happened and what to do about it" is scattered across half a dozen tools.
+**Developers** struggle to debug production transactions — failed txs, runaway compute, unexpected behavior — across RPC responses, logs, and one-off scripts.
 
-**Developers** struggle to debug production transactions. When a tx fails, consumes too much compute, or behaves unexpectedly, the investigation is spread across RPC responses, logs, and custom scripts.
+**Protocol teams** struggle to detect suspicious behavior early. Wormhole ($320M), Mango Markets ($114M), and Crema ($8.8M) all had visible on-chain footprints before the damage was done, but the signal was hard to catch in real time.
 
-**Protocol teams** struggle to detect suspicious behavior early. Wormhole ($320M), Mango Markets ($114M), and Crema ($8.8M) all had visible on-chain footprints before damage was done, but the signal was hard to catch in real time. Teams either build janky custom monitoring scripts or find out something's wrong from crypto Twitter.
-
-GulfWatch closes that gap. Same product, same data layer, same UI, one workflow.
+GulfWatch closes the gap.
 
 ## ✨ What It Does
 
-GulfWatch is two products in one, built on the same runtime data layer. It helps Solana teams understand what their programs are doing in production. It combines real-time monitoring, transaction investigation, compute profiling, and suspicious-activity detection into one runtime intelligence product.
 
 **TL;DR**
 
-- **For developers** — live transaction feed, decoded instructions (System, SPL Token, **Token 2022** including extensions, ATA, Compute Budget, BPF Loader, more), per-instruction compute unit profiling, transaction deep-dives, account and balance state diffs, failed-transaction analysis, and replay and debugging workflows.
-- **For protocol teams** — real-time multi-program monitoring, **seven security detection rules** running today (authority changes, probing patterns, abnormal transfers, Token 2022 extensions), threshold alert rules with per-rule webhook delivery, multi-program suspicious correlation, and an interactive alert rule editor with live-eval preview.
-- **Shared platform** — Programs sidebar in the TUI, rolling window metrics, Prometheus `/metrics` endpoint, zero database, runs as a single Rust binary against any Solana RPC endpoint.
+- **For developers** : live transaction feed, decoded instructions (System, SPL Token, **Token 2022** including extensions, ATA, Compute Budget, BPF Loader, more), per-instruction compute unit profiling, transaction deep-dives, account and balance state diffs, failed-transaction analysis, and replay and debugging workflows.
+- **For protocol teams** : real-time multi-program monitoring, **seven security detection rules** running today (authority changes, probing patterns, abnormal transfers, Token 2022 extensions), threshold alert rules with per-rule webhook delivery, multi-program suspicious correlation, and an interactive alert rule editor with live-eval preview.
+- **Shared platform** : Programs sidebar in the TUI, rolling window metrics, Prometheus `/metrics` endpoint, zero database, runs as a single Rust binary against any Solana RPC endpoint.
 
 <details>
 <summary><b>Show the full feature breakdown (shipped vs. roadmap)</b></summary>
