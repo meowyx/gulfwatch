@@ -4,7 +4,7 @@
 
 ### The runtime intelligence layer for Solana
 
-Monitor live program behavior, inspect transactions deeply, profile runtime performance, and detect suspicious activity — in one product.
+Monitor live program behavior, inspect transactions deeply, profile runtime performance, and detect suspicious activity in one product.
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Solana](https://img.shields.io/badge/solana-9945FF?logo=solana&logoColor=white)](https://solana.com/)
@@ -35,7 +35,7 @@ Once the TUI starts running, then live transactions start streaming into the Pro
 
 The missing layer in Solana is not data access. It's **runtime understanding**.
 
-**Developers** struggle to debug production transactions — failed txs, runaway compute, unexpected behavior — across RPC responses, logs, and one-off scripts.
+**Developers** struggle to debug production transactions, failed txs, runaway compute, unexpected behavior across RPC responses, logs, and one-off scripts.
 
 **Protocol teams** struggle to detect suspicious behavior early. Wormhole ($320M), Mango Markets ($114M), and Crema ($8.8M) all had visible on-chain footprints before the damage was done, but the signal was hard to catch in real time.
 
@@ -82,19 +82,19 @@ Seven detection rules running on every transaction today:
 
 Plus, across shipped and roadmap:
 
-- ✓ **Real-time monitoring** — live WebSocket RPC stream with multi-program support and the Programs sidebar filter
-- ✓ **Threshold alert rules** — REST CRUD on `/api/alerts` with per-rule webhook delivery and 30s dedup cooldown, fires against rolling window metrics (error rate, tx count, CU averages)
-- ◐ **Alert-to-investigation handoff** — webhooks + WebSocket broadcast + TUI alerts panel ship today; click-through from a fired alert to the transaction deep-dive lands with Phase 2.5 Feature C
-- ○ **Multi-program suspicious correlation** — cross-program signer tracker that fires when one wallet touches multiple monitored programs in suspicious patterns within a short window. Phase 2.5 Feature B, Apr 19 progress checkpoint
-- ○ **Alert rule editor with live-eval preview** — interactive in-TUI rule authoring with a preview pane showing which recent txs would have triggered. Phase 4 Tier A, ships in the May 1-4 slot if there's room
+- ✓ **Real-time monitoring** : live WebSocket RPC stream with multi-program support and the Programs sidebar filter
+- ✓ **Threshold alert rules** : REST CRUD on `/api/alerts` with per-rule webhook delivery and 30s dedup cooldown, fires against rolling window metrics (error rate, tx count, CU averages)
+- ◐ **Alert-to-investigation handoff** : webhooks + WebSocket broadcast + TUI alerts panel ship today; click-through from a fired alert to the transaction deep-dive lands with Phase 2.5 Feature C
+- ○ **Multi-program suspicious correlation** : cross-program signer tracker that fires when one wallet touches multiple monitored programs in suspicious patterns within a short window. Phase 2.5 Feature B, Apr 19 progress checkpoint
+- ○ **Alert rule editor with live-eval preview** : interactive in-TUI rule authoring with a preview pane showing which recent txs would have triggered. Phase 4 Tier A, ships in the May 1-4 slot if there's room
 
 ### Shared platform
 
-- ✓ **Multi-program monitoring** — watch Raydium, Jupiter, Token 2022, and your own programs in parallel with a single config
-- ✓ **Programs sidebar in the TUI** — live per-program tx counts, alert flags, and keyboard filtering across Transactions / Metrics / Alerts panels
+- ✓ **Multi-program monitoring** : watch Raydium, Jupiter, Token 2022, and your own programs in parallel with a single config
+- ✓ **Programs sidebar in the TUI** : live per-program tx counts, alert flags, and keyboard filtering across Transactions / Metrics / Alerts panels
 - ✓ **Rolling window metrics** (error rate, tx volume, compute units, instruction breakdown) computed per program
 - ✓ **Prometheus-compatible `/metrics` endpoint** for Grafana integration
-- ✓ **Zero database** — everything runs in memory against a rolling window, so the server is a single binary with no external dependencies beyond an RPC endpoint
+- ✓ **Zero database** : everything runs in memory against a rolling window, so the server is a single binary with no external dependencies beyond an RPC endpoint
 
 For the deep-dive on how each detection works, what it doesn't catch, and how to add a new one: see [`docs/detections.md`](docs/detections.md).
 
@@ -136,13 +136,13 @@ Without these two vars, the large-transfer detection is silently inert. The othe
 
 ### TUI (terminal dashboard)
 
-Self-contained — connects directly to Solana, no server needed. Supports multi-program monitoring via `MONITOR_PROGRAMS` (comma-separated) in `.env`.
+Self-contained : connects directly to Solana, no server needed. Supports multi-program monitoring via `MONITOR_PROGRAMS` (comma-separated) in `.env`.
 
 ```bash
 cargo run -p gulfwatch-tui
 ```
 
-**Layout:** four panels — **Programs** (left sidebar with per-program tx counts and alert flags), **Transactions**, **Metrics**, **Alerts**.
+**Layout:** four panels - **Programs** (left sidebar with per-program tx counts and alert flags), **Transactions**, **Metrics**, **Alerts**.
 
 **Keybindings:**
 
@@ -270,7 +270,7 @@ License TBD — will be finalized pre-submission. Likely MIT or Apache-2.0.
 
 <div align="center">
 
-**Built with 🦀 Rust, [Tokio](https://tokio.rs/), [Ratatui](https://ratatui.rs/), and [Axum](https://github.com/tokio-rs/axum).**
+**Shipped with 🦀 Rust, [Tokio](https://tokio.rs/), [Ratatui](https://ratatui.rs/), and [Axum](https://github.com/tokio-rs/axum).**
 
 _Solana teams do not need more raw data. They need understanding._
 
