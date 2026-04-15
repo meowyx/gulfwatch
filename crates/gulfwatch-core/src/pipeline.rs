@@ -159,7 +159,7 @@ fn to_classification_instructions(tx: &Transaction) -> Vec<InstructionInput> {
         .map(|instruction| InstructionInput {
             program_id: instruction.program_id.clone(),
             kind: match &instruction.kind {
-                InstructionKind::SetAuthority => InstructionInputKind::SetAuthority,
+                InstructionKind::SetAuthority { .. } => InstructionInputKind::SetAuthority,
                 InstructionKind::Upgrade => InstructionInputKind::Upgrade,
                 InstructionKind::SystemTransfer { lamports } => {
                     InstructionInputKind::SystemTransfer { lamports: *lamports }
@@ -175,6 +175,26 @@ fn to_classification_instructions(tx: &Transaction) -> Vec<InstructionInput> {
                 }
                 InstructionKind::StakeDelegate => InstructionInputKind::StakeDelegate,
                 InstructionKind::StakeWithdraw => InstructionInputKind::StakeWithdraw,
+                InstructionKind::InitializeTransferHook => InstructionInputKind::Other {
+                    name: "initializeTransferHook".to_string(),
+                },
+                InstructionKind::UpdateTransferHook => InstructionInputKind::Other {
+                    name: "updateTransferHook".to_string(),
+                },
+                InstructionKind::SetTransferFee => InstructionInputKind::Other {
+                    name: "setTransferFee".to_string(),
+                },
+                InstructionKind::InitializePermanentDelegate => InstructionInputKind::Other {
+                    name: "initializePermanentDelegate".to_string(),
+                },
+                InstructionKind::InitializeDefaultAccountState { .. } => {
+                    InstructionInputKind::Other {
+                        name: "initializeDefaultAccountState".to_string(),
+                    }
+                }
+                InstructionKind::UpdateDefaultAccountState { .. } => InstructionInputKind::Other {
+                    name: "updateDefaultAccountState".to_string(),
+                },
                 InstructionKind::Other { name } => {
                     InstructionInputKind::Other { name: name.clone() }
                 }

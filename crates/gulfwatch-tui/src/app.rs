@@ -24,17 +24,22 @@ pub struct App {
     pub transactions: Vec<Transaction>,
     /// Recent alert events.
     pub alerts: Vec<AlertEvent>,
-    /// Which panel is active (0=transactions, 1=metrics, 2=alerts).
+    pub programs: Vec<String>,
     pub active_panel: usize,
-    /// Selected row index within the active panel.
     pub selected: usize,
-    /// Current view (dashboard or detail).
+    /// None = "All" merged view; Some(i) filters to programs[i].
+    pub selected_program: Option<usize>,
     pub view: View,
-    /// Max transactions to keep in the feed.
     max_feed_size: usize,
-    /// Vertical scroll offset for detail views.
     pub detail_scroll: u16,
+    pub metrics_scroll: u16,
 }
+
+pub const PANEL_COUNT: usize = 4;
+pub const PANEL_SIDEBAR: usize = 0;
+pub const PANEL_TRANSACTIONS: usize = 1;
+pub const PANEL_METRICS: usize = 2;
+pub const PANEL_ALERTS: usize = 3;
 
 impl App {
     pub fn new(state: AppState) -> Self {
@@ -47,12 +52,70 @@ impl App {
             alert_rx,
             transactions: Vec::new(),
             alerts: Vec::new(),
-            active_panel: 0,
+            programs: Vec::new(),
+            active_panel: PANEL_TRANSACTIONS,
             selected: 0,
+            selected_program: None,
             view: View::Dashboard,
             max_feed_size: 500,
             detail_scroll: 0,
+            metrics_scroll: 0,
         }
+    }
+
+    pub fn refresh_programs(&mut self) {
+        if let Ok(programs) = self.state.monitored_programs.try_read() {
+            self.programs = programs.clone();
+        }
+        if let Some(idx) = self.selected_program {
+            if idx >= self.programs.len() {
+                self.selected_program = if self.programs.is_empty() {
+                    None
+                } else {
+                    Some(self.programs.len() - 1)
+                };
+            }
+        }
+    }
+
+    pub fn focused_program_id(&self) -> Option<&str> {
+        self.selected_program
+            .and_then(|i| self.programs.get(i).map(|s| s.as_str()))
+    }
+
+    pub fn focused_program_label(&self) -> String {
+        match self.focused_program_id() {
+            Some(pid) => short_program_id(pid),
+            None => "All".to_string(),
+        }
+    }
+
+    pub fn select_program(&mut self, idx: Option<usize>) {
+        match idx {
+            None => self.selected_program = None,
+            Some(i) if i < self.programs.len() => self.selected_program = Some(i),
+            _ => {}
+        }
+    }
+
+    pub fn filtered_transactions(&self) -> impl Iterator<Item = &Transaction> {
+        let focused = self.focused_program_id().map(|s| s.to_string());
+        self.transactions.iter().filter(move |tx| match &focused {
+            Some(pid) => tx.program_id == *pid,
+            None => true,
+        })
+    }
+
+    pub fn filtered_alerts(&self) -> impl Iterator<Item = &AlertEvent> {
+        let focused = self.focused_program_id().map(|s| s.to_string());
+        self.alerts.iter().filter(move |a| match &focused {
+            Some(pid) => a.program_id == *pid,
+            None => true,
+        })
+    }
+
+    pub fn program_has_recent_alert(&self, program_id: &str) -> bool {
+        self.alerts.iter().any(|a| a.program_id == program_id)
     }
 
     /// Non-blocking poll for new transactions and alerts from broadcast channels.
@@ -82,16 +145,18 @@ impl App {
                 Err(_) => break,
             }
         }
+
+        self.refresh_programs();
     }
 
     pub fn next_panel(&mut self) {
-        self.active_panel = (self.active_panel + 1) % 3;
+        self.active_panel = (self.active_panel + 1) % PANEL_COUNT;
         self.selected = 0;
     }
 
     pub fn prev_panel(&mut self) {
         self.active_panel = if self.active_panel == 0 {
-            2
+            PANEL_COUNT - 1
         } else {
             self.active_panel - 1
         };
@@ -99,38 +164,58 @@ impl App {
     }
 
     pub fn scroll_up(&mut self) {
-        if matches!(self.view, View::Dashboard) {
-            self.selected = self.selected.saturating_sub(1);
-        } else {
+        if !matches!(self.view, View::Dashboard) {
             self.detail_scroll = self.detail_scroll.saturating_sub(1);
+            return;
+        }
+        match self.active_panel {
+            PANEL_METRICS => {
+                self.metrics_scroll = self.metrics_scroll.saturating_sub(1);
+            }
+            _ => {
+                self.selected = self.selected.saturating_sub(1);
+            }
         }
     }
 
     pub fn scroll_down(&mut self) {
-        if matches!(self.view, View::Dashboard) {
-            let max = self.list_len().saturating_sub(1);
-            if self.selected < max {
-                self.selected += 1;
-            }
-        } else {
+        if !matches!(self.view, View::Dashboard) {
             self.detail_scroll = self.detail_scroll.saturating_add(1);
+            return;
+        }
+        match self.active_panel {
+            PANEL_METRICS => {
+                self.metrics_scroll = self.metrics_scroll.saturating_add(1);
+            }
+            _ => {
+                let max = self.list_len().saturating_sub(1);
+                if self.selected < max {
+                    self.selected += 1;
+                }
+            }
         }
     }
 
-    /// Open detail view for the currently selected item.
-    /// Snapshots the item by clone, so the live feed sliding under us
-    /// can't change what the detail view is showing.
     pub fn open_detail(&mut self) {
         match self.active_panel {
-            0 => {
-                if let Some(tx) = self.transactions.get(self.selected) {
-                    self.view = View::TransactionDetail(Box::new(tx.clone()));
+            PANEL_SIDEBAR => {
+                if self.selected == 0 {
+                    self.selected_program = None;
+                } else {
+                    self.select_program(Some(self.selected - 1));
+                }
+            }
+            PANEL_TRANSACTIONS => {
+                let picked = self.filtered_transactions().nth(self.selected).cloned();
+                if let Some(tx) = picked {
+                    self.view = View::TransactionDetail(Box::new(tx));
                     self.detail_scroll = 0;
                 }
             }
-            2 => {
-                if let Some(alert) = self.alerts.get(self.selected) {
-                    self.view = View::AlertDetail(Box::new(alert.clone()));
+            PANEL_ALERTS => {
+                let picked = self.filtered_alerts().nth(self.selected).cloned();
+                if let Some(alert) = picked {
+                    self.view = View::AlertDetail(Box::new(alert));
                     self.detail_scroll = 0;
                 }
             }
@@ -144,13 +229,21 @@ impl App {
         self.detail_scroll = 0;
     }
 
-    /// Number of items in the currently active panel's list.
     fn list_len(&self) -> usize {
         match self.active_panel {
-            0 => self.transactions.len(),
-            2 => self.alerts.len(),
+            PANEL_SIDEBAR => self.programs.len() + 1,
+            PANEL_TRANSACTIONS => self.filtered_transactions().count(),
+            PANEL_ALERTS => self.filtered_alerts().count(),
             _ => 0,
         }
+    }
+}
+
+pub fn short_program_id(pid: &str) -> String {
+    if pid.len() <= 12 {
+        pid.to_string()
+    } else {
+        format!("{}…{}", &pid[..4], &pid[pid.len() - 4..])
     }
 }
 
@@ -161,9 +254,13 @@ mod tests {
     use gulfwatch_core::transaction::Transaction;
 
     fn make_tx() -> Transaction {
+        tx_for_program("prog")
+    }
+
+    fn tx_for_program(program_id: &str) -> Transaction {
         Transaction {
-            signature: "sig".to_string(),
-            program_id: "prog".to_string(),
+            signature: format!("sig_{program_id}"),
+            program_id: program_id.to_string(),
             block_slot: 1,
             timestamp: Utc::now(),
             success: true,
@@ -194,6 +291,63 @@ mod tests {
 
         app.close_detail();
         assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn selecting_program_filters_transactions_and_alerts() {
+        let (state, _rx) = AppState::new(16, 10);
+        state.add_program("alpha".to_string()).await;
+        state.add_program("beta".to_string()).await;
+
+        let mut app = App::new(state);
+        app.refresh_programs();
+        app.transactions.push(tx_for_program("alpha"));
+        app.transactions.push(tx_for_program("beta"));
+        app.transactions.push(tx_for_program("alpha"));
+        app.alerts.push(AlertEvent {
+            rule_id: "r1".to_string(),
+            rule_name: "rule".to_string(),
+            program_id: "alpha".to_string(),
+            metric: "m".to_string(),
+            value: 1.0,
+            threshold: 0.0,
+            fired_at: Utc::now(),
+        });
+        app.alerts.push(AlertEvent {
+            rule_id: "r2".to_string(),
+            rule_name: "rule".to_string(),
+            program_id: "beta".to_string(),
+            metric: "m".to_string(),
+            value: 1.0,
+            threshold: 0.0,
+            fired_at: Utc::now(),
+        });
+
+        // Default is "All" — nothing filtered.
+        assert_eq!(app.filtered_transactions().count(), 3);
+        assert_eq!(app.filtered_alerts().count(), 2);
+        assert_eq!(app.focused_program_label(), "All");
+
+        // Select the first monitored program (alpha).
+        app.select_program(Some(0));
+        assert_eq!(app.focused_program_id(), Some("alpha"));
+        assert_eq!(app.filtered_transactions().count(), 2);
+        assert_eq!(app.filtered_alerts().count(), 1);
+
+        // Switch to beta.
+        app.select_program(Some(1));
+        assert_eq!(app.focused_program_id(), Some("beta"));
+        assert_eq!(app.filtered_transactions().count(), 1);
+        assert_eq!(app.filtered_alerts().count(), 1);
+
+        // Out-of-range select is ignored, filter stays on beta.
+        app.select_program(Some(99));
+        assert_eq!(app.focused_program_id(), Some("beta"));
+
+        // Back to All.
+        app.select_program(None);
+        assert_eq!(app.focused_program_id(), None);
+        assert_eq!(app.filtered_transactions().count(), 3);
     }
 
     #[tokio::test]

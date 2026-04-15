@@ -9,13 +9,19 @@ use crate::cu_attribution::CuProfile;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InstructionKind {
-    SetAuthority,
+    SetAuthority { authority_type: u8 },
     Upgrade,
     SystemTransfer { lamports: u64 },
     TokenTransfer { amount: u64 },
     TokenTransferChecked { amount: u64, decimals: u8 },
     StakeDelegate,
     StakeWithdraw,
+    InitializeTransferHook,
+    UpdateTransferHook,
+    SetTransferFee,
+    InitializePermanentDelegate,
+    InitializeDefaultAccountState { frozen: bool },
+    UpdateDefaultAccountState { frozen: bool },
     Other { name: String },
     Unknown,
 }
@@ -30,13 +36,21 @@ pub struct ParsedInstruction {
 impl ParsedInstruction {
     pub fn display_name(&self) -> Option<&str> {
         match &self.kind {
-            InstructionKind::SetAuthority => Some("setAuthority"),
+            InstructionKind::SetAuthority { .. } => Some("setAuthority"),
             InstructionKind::Upgrade => Some("upgrade"),
             InstructionKind::SystemTransfer { .. } => Some("systemTransfer"),
             InstructionKind::TokenTransfer { .. } => Some("transfer"),
             InstructionKind::TokenTransferChecked { .. } => Some("transferChecked"),
             InstructionKind::StakeDelegate => Some("stakeDelegate"),
             InstructionKind::StakeWithdraw => Some("stakeWithdraw"),
+            InstructionKind::InitializeTransferHook => Some("initializeTransferHook"),
+            InstructionKind::UpdateTransferHook => Some("updateTransferHook"),
+            InstructionKind::SetTransferFee => Some("setTransferFee"),
+            InstructionKind::InitializePermanentDelegate => Some("initializePermanentDelegate"),
+            InstructionKind::InitializeDefaultAccountState { .. } => {
+                Some("initializeDefaultAccountState")
+            }
+            InstructionKind::UpdateDefaultAccountState { .. } => Some("updateDefaultAccountState"),
             InstructionKind::Other { name } => Some(name.as_str()),
             InstructionKind::Unknown => None,
         }
@@ -47,8 +61,14 @@ impl ParsedInstruction {
     // reports SetAuthority as its headline instruction_type.
     pub fn headline_priority(&self) -> u8 {
         match &self.kind {
-            InstructionKind::SetAuthority => 100,
+            InstructionKind::SetAuthority { .. } => 100,
             InstructionKind::Upgrade => 99,
+            InstructionKind::InitializePermanentDelegate => 98,
+            InstructionKind::InitializeDefaultAccountState { .. } => 97,
+            InstructionKind::UpdateDefaultAccountState { .. } => 96,
+            InstructionKind::InitializeTransferHook => 95,
+            InstructionKind::UpdateTransferHook => 94,
+            InstructionKind::SetTransferFee => 93,
             InstructionKind::StakeWithdraw => 80,
             InstructionKind::StakeDelegate => 79,
             InstructionKind::TokenTransferChecked { .. } => 50,
@@ -111,7 +131,7 @@ mod tests {
                     name: "swap".to_string(),
                 },
             ),
-            ix("token", InstructionKind::SetAuthority),
+            ix("token", InstructionKind::SetAuthority { authority_type: 0 }),
         ];
         assert_eq!(
             Transaction::derive_instruction_type(&instructions),

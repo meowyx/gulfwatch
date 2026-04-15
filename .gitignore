@@ -12,3 +12,7 @@ web/.env.local
 
 # Local planning mirror (source of truth lives in Obsidian)
 plan.md
+
+# Scratch space for research, sample fetches, throwaway experiments.
+# The whole directory is ignored — create it ad-hoc when needed.
+tmp/

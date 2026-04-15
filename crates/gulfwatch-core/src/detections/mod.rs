@@ -4,10 +4,15 @@
 pub mod authority_change;
 pub mod failed_tx_cluster;
 pub mod large_transfer;
+pub mod token2022;
 
 pub use authority_change::AuthorityChangeDetection;
 pub use failed_tx_cluster::FailedTxClusterDetection;
 pub use large_transfer::LargeTransferDetection;
+pub use token2022::{
+    DefaultAccountStateFrozenDetection, PermanentDelegateDetection, TransferFeeAuthorityChangeDetection,
+    TransferHookUpgradeDetection,
+};
 
 use crate::alert::AlertEvent;
 use crate::transaction::Transaction;
