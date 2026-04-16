@@ -10,7 +10,8 @@ use ratatui::{
 };
 
 use crate::app::{
-    short_program_id, App, View, PANEL_ALERTS, PANEL_METRICS, PANEL_SIDEBAR, PANEL_TRANSACTIONS,
+    short_program_id, App, DetailTab, View, PANEL_ALERTS, PANEL_METRICS, PANEL_SIDEBAR,
+    PANEL_TRANSACTIONS,
 };
 
 const ACTIVE_BORDER: Color = Color::Cyan;
@@ -562,46 +563,95 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(1),
+            Constraint::Length(3), // header
+            Constraint::Length(1), // tab strip
+            Constraint::Min(0),    // body
+            Constraint::Length(1), // status bar
         ])
         .split(f.area());
 
     draw_header(f, chunks[0]);
+    draw_detail_tab_strip(f, chunks[1], app.detail_tab);
 
     let block = Block::default()
-        .title(Line::from(vec![Span::styled(
-            " Transaction Detail ",
-            Style::default().fg(ACTIVE_BORDER).bold(),
-        )]))
+        .title(Line::from(vec![
+            Span::styled(
+                " Transaction Detail · ",
+                Style::default().fg(ACTIVE_BORDER).bold(),
+            ),
+            Span::styled(
+                app.detail_tab.label(),
+                Style::default().fg(ACTIVE_BORDER).bold(),
+            ),
+            Span::styled(" ", Style::default().fg(ACTIVE_BORDER).bold()),
+        ]))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACTIVE_BORDER));
 
-    let inner = block.inner(chunks[1]);
-    f.render_widget(block, chunks[1]);
+    let inner = block.inner(chunks[2]);
+    f.render_widget(block, chunks[2]);
 
-    let status_text = if tx.success {
-        "Success ✓"
-    } else {
-        "Failed ✗"
+    let lines = match app.detail_tab {
+        DetailTab::Overview => tx_overview_lines(tx),
+        DetailTab::Instructions => tx_instructions_lines(tx),
+        DetailTab::Logs => tx_logs_lines(tx),
+        DetailTab::Accounts => tx_accounts_lines(tx),
+        DetailTab::Diff => tx_diff_lines(tx),
+        DetailTab::Errors => tx_errors_lines(tx),
     };
-    let status_color = if tx.success {
-        SUCCESS_COLOR
-    } else {
-        ERROR_COLOR
-    };
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.detail_scroll, 0)),
+        inner,
+    );
+
+    let bar = Paragraph::new(Line::from(vec![
+        Span::styled(" ←/→", Style::default().fg(HEADER_COLOR).bold()),
+        Span::styled(" tab  ", Style::default().fg(DIM_COLOR)),
+        Span::styled("↑/↓", Style::default().fg(HEADER_COLOR).bold()),
+        Span::styled(" scroll  ", Style::default().fg(DIM_COLOR)),
+        Span::styled("Esc", Style::default().fg(HEADER_COLOR).bold()),
+        Span::styled(" back  ", Style::default().fg(DIM_COLOR)),
+        Span::styled("q", Style::default().fg(HEADER_COLOR).bold()),
+        Span::styled(" quit", Style::default().fg(DIM_COLOR)),
+    ]))
+    .style(Style::default().bg(Color::DarkGray));
+    f.render_widget(bar, chunks[3]);
+}
+
+fn draw_detail_tab_strip(f: &mut Frame, area: Rect, active: DetailTab) {
+    let mut spans: Vec<Span> = Vec::with_capacity(DetailTab::ALL.len() * 2 + 1);
+    spans.push(Span::styled(" ", Style::default().fg(DIM_COLOR)));
+    for (i, tab) in DetailTab::ALL.iter().enumerate() {
+        let style = if *tab == active {
+            Style::default().fg(ACTIVE_BORDER).bold()
+        } else {
+            Style::default().fg(DIM_COLOR)
+        };
+        spans.push(Span::styled(format!(" {} ", tab.label()), style));
+        if i + 1 < DetailTab::ALL.len() {
+            spans.push(Span::styled("·", Style::default().fg(DIM_COLOR)));
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn tx_overview_lines(tx: &Transaction) -> Vec<Line<'static>> {
+    let status_text = if tx.success { "Success ✓" } else { "Failed ✗" };
+    let status_color = if tx.success { SUCCESS_COLOR } else { ERROR_COLOR };
 
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled("  Signature:    ", Style::default().fg(DIM_COLOR)),
-            Span::styled(&tx.signature, Style::default().fg(Color::White)),
+            Span::styled(tx.signature.clone(), Style::default().fg(Color::White)),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Program:      ", Style::default().fg(DIM_COLOR)),
-            Span::styled(&tx.program_id, Style::default().fg(HEADER_COLOR)),
+            Span::styled(tx.program_id.clone(), Style::default().fg(HEADER_COLOR)),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -627,7 +677,9 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
         Line::from(vec![
             Span::styled("  Instruction:  ", Style::default().fg(DIM_COLOR)),
             Span::styled(
-                tx.instruction_type.as_deref().unwrap_or("unknown"),
+                tx.instruction_type
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
                 Style::default().fg(Color::White),
             ),
         ]),
@@ -655,41 +707,6 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("  Accounts ({}):", tx.accounts.len()),
-        Style::default().fg(DIM_COLOR),
-    )));
-
-    for (i, account) in tx.accounts.iter().enumerate() {
-        lines.push(Line::from(vec![
-            Span::styled(format!("    [{:>2}] ", i), Style::default().fg(DIM_COLOR)),
-            Span::styled(account.as_str(), Style::default().fg(Color::White)),
-        ]));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        format!("  Parsed Instructions ({}):", tx.instructions.len()),
-        Style::default().fg(DIM_COLOR),
-    )));
-    for (i, ix) in tx.instructions.iter().enumerate() {
-        let kind = ix.display_name().unwrap_or("unknown");
-        lines.push(Line::from(vec![
-            Span::styled(format!("    [{:>2}] ", i), Style::default().fg(DIM_COLOR)),
-            Span::styled(kind, Style::default().fg(HEADER_COLOR)),
-            Span::styled("  ", Style::default().fg(DIM_COLOR)),
-            Span::styled(ix.program_id.as_str(), Style::default().fg(Color::White)),
-        ]));
-
-        if !ix.accounts.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("         accounts: ", Style::default().fg(DIM_COLOR)),
-                Span::styled(ix.accounts.join(", "), Style::default().fg(Color::White)),
-            ]));
-        }
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
         "  Classification:",
         Style::default().fg(DIM_COLOR),
     )));
@@ -698,14 +715,14 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
             lines.push(Line::from(vec![
                 Span::styled("    category: ", Style::default().fg(DIM_COLOR)),
                 Span::styled(
-                    classification.category.as_str(),
+                    classification.category.clone(),
                     Style::default().fg(Color::White),
                 ),
             ]));
             lines.push(Line::from(vec![
                 Span::styled("    classifier: ", Style::default().fg(DIM_COLOR)),
                 Span::styled(
-                    classification.classifier.as_str(),
+                    classification.classifier.clone(),
                     Style::default().fg(HEADER_COLOR),
                 ),
             ]));
@@ -719,7 +736,7 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
             lines.push(Line::from(vec![
                 Span::styled("    summary: ", Style::default().fg(DIM_COLOR)),
                 Span::styled(
-                    classification.summary.as_str(),
+                    classification.summary.clone(),
                     Style::default().fg(Color::White),
                 ),
             ]));
@@ -728,7 +745,9 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
             lines.push(Line::from(vec![
                 Span::styled("    headline type: ", Style::default().fg(DIM_COLOR)),
                 Span::styled(
-                    tx.instruction_type.as_deref().unwrap_or("unknown"),
+                    tx.instruction_type
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
                     Style::default().fg(Color::White),
                 ),
             ]));
@@ -752,17 +771,16 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
             } else {
                 DIM_COLOR
             };
-
             lines.push(Line::from(vec![
                 Span::styled("    ", Style::default().fg(DIM_COLOR)),
                 Span::styled(status, Style::default().fg(status_color).bold()),
                 Span::styled("  ", Style::default().fg(DIM_COLOR)),
                 Span::styled(
-                    decision.classifier.as_str(),
+                    decision.classifier.clone(),
                     Style::default().fg(HEADER_COLOR),
                 ),
                 Span::styled("  ", Style::default().fg(DIM_COLOR)),
-                Span::styled(decision.reason.as_str(), Style::default().fg(Color::White)),
+                Span::styled(decision.reason.clone(), Style::default().fg(Color::White)),
             ]));
         }
 
@@ -794,47 +812,338 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
         }
     }
 
+    lines
+}
+
+fn tx_instructions_lines(tx: &Transaction) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Parsed Instructions ({}):", tx.instructions.len()),
+            Style::default().fg(DIM_COLOR),
+        )),
+    ];
+
+    if tx.instructions.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "    (no instructions decoded)",
+            Style::default().fg(DIM_COLOR),
+        )));
+        return lines;
+    }
+
+    let failed_index = tx.tx_error.as_ref().and_then(|e| e.instruction_index);
+
+    for (i, ix) in tx.instructions.iter().enumerate() {
+        let is_failed = Some(i) == failed_index;
+        let (marker, marker_color, kind_color) = if is_failed {
+            ("    ✗ ", ERROR_COLOR, ERROR_COLOR)
+        } else {
+            ("    [", DIM_COLOR, HEADER_COLOR)
+        };
+        let kind = ix
+            .display_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let prefix = if is_failed {
+            format!("{}[{:>2}] ", marker, i)
+        } else {
+            format!("{}{:>2}] ", marker, i)
+        };
+        let kind_style = if is_failed {
+            Style::default().fg(kind_color).bold()
+        } else {
+            Style::default().fg(kind_color)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(marker_color)),
+            Span::styled(kind, kind_style),
+            Span::styled("  ", Style::default().fg(DIM_COLOR)),
+            Span::styled(ix.program_id.clone(), Style::default().fg(Color::White)),
+        ]));
+
+        if !ix.accounts.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("         accounts: ", Style::default().fg(DIM_COLOR)),
+                Span::styled(ix.accounts.join(", "), Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+    lines
+}
+
+fn tx_errors_lines(tx: &Transaction) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from("")];
+
+    let Some(err) = tx.tx_error.as_ref() else {
+        let (msg, color) = if tx.success {
+            ("  Transaction succeeded — no errors recorded.", SUCCESS_COLOR)
+        } else {
+            (
+                "  Transaction failed but no structured error metadata was captured.",
+                DIM_COLOR,
+            )
+        };
+        lines.push(Line::from(Span::styled(msg, Style::default().fg(color))));
+        return lines;
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("  Status:    ", Style::default().fg(DIM_COLOR)),
+        Span::styled("Failed ✗", Style::default().fg(ERROR_COLOR).bold()),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  Error:     ", Style::default().fg(DIM_COLOR)),
+        Span::styled(err.kind.clone(), Style::default().fg(ERROR_COLOR).bold()),
+    ]));
+    if let Some(code) = err.custom_code {
+        lines.push(Line::from(vec![
+            Span::styled("  Code:      ", Style::default().fg(DIM_COLOR)),
+            Span::styled(format!("{}", code), Style::default().fg(Color::White)),
+            Span::styled(
+                "  (Anchor IDL decoder will translate to a name in Phase 3)",
+                Style::default().fg(DIM_COLOR),
+            ),
+        ]));
+    }
+
+    if let Some(idx) = err.instruction_index {
+        let ix_summary = tx
+            .instructions
+            .get(idx)
+            .map(|ix| {
+                format!(
+                    "{} (program: {})",
+                    ix.display_name().unwrap_or("unknown"),
+                    ix.program_id
+                )
+            })
+            .unwrap_or_else(|| "(out of range — instruction missing from decoded list)".to_string());
+        lines.push(Line::from(vec![
+            Span::styled("  Failing:   ", Style::default().fg(DIM_COLOR)),
+            Span::styled(format!("ix [{}] · ", idx), Style::default().fg(ERROR_COLOR)),
+            Span::styled(ix_summary, Style::default().fg(Color::White)),
+        ]));
+    }
+
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Raw Transaction JSON:",
+        "  Raw err:",
         Style::default().fg(DIM_COLOR),
     )));
-    match serde_json::to_string_pretty(tx) {
-        Ok(raw) => {
-            for raw_line in raw.lines() {
-                lines.push(Line::from(vec![
-                    Span::styled("    ", Style::default().fg(DIM_COLOR)),
-                    Span::styled(raw_line.to_string(), Style::default().fg(Color::White)),
-                ]));
-            }
-        }
-        Err(_) => {
+    lines.push(Line::from(vec![
+        Span::styled("    ", Style::default().fg(DIM_COLOR)),
+        Span::styled(err.raw.clone(), Style::default().fg(Color::White)),
+    ]));
+
+    if !tx.logs.is_empty() {
+        let tail: Vec<&String> = tx.logs.iter().rev().take(8).collect();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  Tail logs (last {} of {}):",
+                tail.len(),
+                tx.logs.len()
+            ),
+            Style::default().fg(DIM_COLOR),
+        )));
+        for log in tail.iter().rev() {
+            let color = log_line_color(log);
             lines.push(Line::from(vec![
                 Span::styled("    ", Style::default().fg(DIM_COLOR)),
-                Span::styled(
-                    "<failed to serialize transaction>",
-                    Style::default().fg(ERROR_COLOR),
-                ),
+                Span::styled((*log).clone(), Style::default().fg(color)),
             ]));
         }
     }
 
-    f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((app.detail_scroll, 0)),
-        inner,
-    );
+    lines
+}
 
-    // Status bar
-    let bar = Paragraph::new(Line::from(vec![
-        Span::styled(" Esc", Style::default().fg(HEADER_COLOR).bold()),
-        Span::styled(" back  ", Style::default().fg(DIM_COLOR)),
-        Span::styled("q", Style::default().fg(HEADER_COLOR).bold()),
-        Span::styled(" quit", Style::default().fg(DIM_COLOR)),
-    ]))
-    .style(Style::default().bg(Color::DarkGray));
-    f.render_widget(bar, chunks[2]);
+fn tx_logs_lines(tx: &Transaction) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Program Logs ({}):", tx.logs.len()),
+            Style::default().fg(DIM_COLOR),
+        )),
+    ];
+
+    if tx.logs.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "    (no log messages captured)",
+            Style::default().fg(DIM_COLOR),
+        )));
+        return lines;
+    }
+
+    for (i, log) in tx.logs.iter().enumerate() {
+        let color = log_line_color(log);
+        lines.push(Line::from(vec![
+            Span::styled(format!("    [{:>3}] ", i), Style::default().fg(DIM_COLOR)),
+            Span::styled(log.clone(), Style::default().fg(color)),
+        ]));
+    }
+    lines
+}
+
+fn log_line_color(log: &str) -> Color {
+    if log.contains("failed") || log.contains("Error") {
+        ERROR_COLOR
+    } else if log.starts_with("Program log:") || log.starts_with("Program data:") {
+        Color::White
+    } else if log.contains(" success") {
+        SUCCESS_COLOR
+    } else if log.contains(" invoke ") || log.contains(" consumed ") {
+        HEADER_COLOR
+    } else {
+        Color::White
+    }
+}
+
+fn tx_diff_lines(tx: &Transaction) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from("")];
+
+    let Some(diff) = tx.balance_diff.as_ref() else {
+        lines.push(Line::from(Span::styled(
+            "  (no balance changes recorded)",
+            Style::default().fg(DIM_COLOR),
+        )));
+        return lines;
+    };
+
+    if diff.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no balance changes)",
+            Style::default().fg(DIM_COLOR),
+        )));
+        return lines;
+    }
+
+    if !diff.sol.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  SOL Changes ({}):", diff.sol.len()),
+            Style::default().fg(DIM_COLOR),
+        )));
+        let mut sol = diff.sol.clone();
+        sol.sort_by_key(|d| -d.delta_lamports.abs());
+        for d in sol {
+            let (sign, color) = if d.delta_lamports >= 0 {
+                ("+", SUCCESS_COLOR)
+            } else {
+                ("", ERROR_COLOR)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("    [{:>2}] ", d.account_index),
+                    Style::default().fg(DIM_COLOR),
+                ),
+                Span::styled(
+                    truncate_account(&d.account, 32),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("{}{:.9} SOL", sign, d.delta_lamports as f64 / 1e9),
+                    Style::default().fg(color).bold(),
+                ),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    if !diff.tokens.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  Token Changes ({}):", diff.tokens.len()),
+            Style::default().fg(DIM_COLOR),
+        )));
+        let mut tokens = diff.tokens.clone();
+        tokens.sort_by_key(|d| -d.delta.abs());
+        for d in tokens {
+            let (sign, color) = if d.delta >= 0 {
+                ("+", SUCCESS_COLOR)
+            } else {
+                ("", ERROR_COLOR)
+            };
+            let scale = 10f64.powi(d.decimals as i32);
+            let amount = d.delta as f64 / scale;
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("    [{:>2}] ", d.account_index),
+                    Style::default().fg(DIM_COLOR),
+                ),
+                Span::styled(
+                    truncate_account(&d.account, 24),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    truncate_account(&d.mint, 12),
+                    Style::default().fg(HEADER_COLOR),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    format!("{}{:.*}", sign, d.decimals as usize, amount),
+                    Style::default().fg(color).bold(),
+                ),
+            ]));
+            if let Some(owner) = d.owner.as_ref() {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "         owner: ",
+                        Style::default().fg(DIM_COLOR),
+                    ),
+                    Span::styled(
+                        truncate_account(owner, 32),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+            }
+        }
+    }
+
+    lines
+}
+
+fn truncate_account(s: &str, width: usize) -> String {
+    if s.len() <= width || width < 8 {
+        s.to_string()
+    } else {
+        let head = (width - 1) / 2;
+        let tail = width - 1 - head;
+        format!("{}…{}", &s[..head], &s[s.len() - tail..])
+    }
+}
+
+fn tx_accounts_lines(tx: &Transaction) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Accounts ({}):", tx.accounts.len()),
+            Style::default().fg(DIM_COLOR),
+        )),
+    ];
+
+    if tx.accounts.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "    (no accounts in transaction)",
+            Style::default().fg(DIM_COLOR),
+        )));
+        return lines;
+    }
+
+    for (i, account) in tx.accounts.iter().enumerate() {
+        let role = if i == 0 { " (fee payer)" } else { "" };
+        lines.push(Line::from(vec![
+            Span::styled(format!("    [{:>2}] ", i), Style::default().fg(DIM_COLOR)),
+            Span::styled(account.clone(), Style::default().fg(Color::White)),
+            Span::styled(role, Style::default().fg(DIM_COLOR)),
+        ]));
+    }
+    lines
 }
 
 // ─── Alert Detail View ───────────────────────────────────

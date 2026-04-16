@@ -2,11 +2,13 @@
 //! `Detection` against every monitored transaction.
 
 pub mod authority_change;
+pub mod correlation;
 pub mod failed_tx_cluster;
 pub mod large_transfer;
 pub mod token2022;
 
 pub use authority_change::AuthorityChangeDetection;
+pub use correlation::CrossProgramCorrelationDetection;
 pub use failed_tx_cluster::FailedTxClusterDetection;
 pub use large_transfer::LargeTransferDetection;
 pub use token2022::{
@@ -56,6 +58,9 @@ mod tests {
             cu_profile: None,
             classification: None,
             classification_debug: None,
+            logs: vec![],
+            balance_diff: None,
+            tx_error: None,
         }
     }
 

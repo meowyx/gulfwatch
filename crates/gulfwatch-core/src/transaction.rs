@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use gulfwatch_classification::{ClassificationDebugTrace, TransactionClassification};
 use serde::{Deserialize, Serialize};
 
+use crate::balance_diff::BalanceDiff;
 use crate::cu_attribution::CuProfile;
+use crate::tx_error::TransactionError;
 
 /// A single instruction inside a transaction, classified by the parser.
 /// Detections pattern-match on this instead of re-parsing raw bytes.
@@ -99,6 +101,14 @@ pub struct Transaction {
     pub classification: Option<TransactionClassification>,
     #[serde(default)]
     pub classification_debug: Option<ClassificationDebugTrace>,
+    // Raw `meta.logMessages` from getTransaction. Kept verbatim for the deep-dive
+    // Logs tab; CU profiling consumes the same source upstream.
+    #[serde(default)]
+    pub logs: Vec<String>,
+    #[serde(default)]
+    pub balance_diff: Option<BalanceDiff>,
+    #[serde(default)]
+    pub tx_error: Option<TransactionError>,
 }
 
 impl Transaction {

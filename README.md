@@ -8,7 +8,7 @@ Monitor live program behavior, inspect transactions deeply, profile runtime perf
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Solana](https://img.shields.io/badge/solana-9945FF?logo=solana&logoColor=white)](https://solana.com/)
-[![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-149%20passing-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-pre--alpha-yellow)]()
 [![Colosseum](https://img.shields.io/badge/colosseum-hackathon-blueviolet)](https://www.colosseum.org/)
 
@@ -47,7 +47,7 @@ GulfWatch closes the gap.
 **TL;DR**
 
 - **For developers** : live transaction feed, decoded instructions (System, SPL Token, **Token 2022** including extensions, ATA, Compute Budget, BPF Loader, more), per-instruction compute unit profiling, transaction deep-dives, account and balance state diffs, failed-transaction analysis, and replay and debugging workflows.
-- **For protocol teams** : real-time multi-program monitoring, **seven security detection rules** running today (authority changes, probing patterns, abnormal transfers, Token 2022 extensions), threshold alert rules with per-rule webhook delivery, multi-program suspicious correlation, and an interactive alert rule editor with live-eval preview.
+- **For protocol teams** : real-time multi-program monitoring, **eight security detection rules** running today (authority changes, probing patterns, abnormal transfers, Token 2022 extensions, cross-program signer correlation), threshold alert rules with per-rule webhook delivery, and an interactive alert rule editor with live-eval preview.
 - **Shared platform** : Programs sidebar in the TUI, rolling window metrics, Prometheus `/metrics` endpoint, zero database, runs as a single Rust binary against any Solana RPC endpoint.
 
 <details>
@@ -61,14 +61,14 @@ Legend: ✓ shipped, ◐ partial, ○ roadmap.
 - ✓ **Decoded instructions** for System, SPL Token, Token 2022 (including extension instructions), Associated Token Account, Memo, Compute Budget, BPF Loader, Stake, plus prefix-matched coverage for Raydium and Jupiter
 - ✓ **Per-instruction compute unit profiling** reconstructed from `getTransaction` log messages, no extra RPC calls, no custom node
 - ✓ **Log inspection** — full transaction logs surface in the TUI detail view alongside the CU profile
-- ◐ **Transaction deep-dives** — detail view with decoded instructions and account list ships today; the fuller tabbed deep-dive with account state diff and failed-tx mode lands in Phase 2.5 Feature C (Apr 17-22)
-- ○ **Account and balance diffs** — structured diff of `preBalances` / `postBalances` / `preTokenBalances` / `postTokenBalances`. Phase 2.5 Feature C, Apr 19-20
-- ○ **Failed transaction analysis** — parsed `InstructionError` with the failing instruction highlighted, error code translated to the Anchor IDL error name. Phase 2.5 Feature C, Apr 21-22
+- ✓ **Transaction deep-dives** — tabbed detail view (Overview / Instructions / Logs / Accounts) with `←`/`→` to switch tabs and `GET /api/transactions/:signature` returning the full decoded tx. Account state diff and failed-tx mode land as additional tabs in the next Feature C passes.
+- ✓ **Account and balance diffs** — structured diff of `preBalances` / `postBalances` / `preTokenBalances` / `postTokenBalances`, surfaced as the **Diff** tab in the TUI deep-dive and in the `/api/transactions/{signature}` JSON.
+- ◐ **Failed transaction analysis** — parsed `InstructionError` with the failing instruction highlighted in the Instructions tab, custom error code, and tail logs surfaced in the new **Errors** tab. Translation of error codes to Anchor IDL names ships with the IDL decoder in Phase 3.
 - ○ **Replay and debugging workflows** — replay any transaction from the rolling window against the current detection rules to see which would have fired. Phase 4 Tier S, Apr 28 – May 3
 
 ### Runtime detection (for protocol teams)
 
-Seven detection rules running on every transaction today:
+Eight detection rules running on every transaction today:
 
 | Detection | Triggers on | Signal |
 |---|---|---|
@@ -79,13 +79,14 @@ Seven detection rules running on every transaction today:
 | **Permanent Delegate** | Token 2022 `InitializePermanentDelegate` or `SetAuthority(PermanentDelegate)` | A mint now has a silent-move authority over user balances |
 | **Transfer Fee Authority Change** | Token 2022 `SetAuthority(TransferFeeConfig)` | Control of the mint's fee lever changed hands |
 | **Default Account State Frozen** | Token 2022 default account state flipped to Frozen | New accounts on this mint start frozen by default |
+| **Cross-Program Correlation** | One signer touches `CORRELATION_MIN_PROGRAMS` distinct monitored programs within `CORRELATION_WINDOW_SECS` with the same suspicion kind (failed-then-success, large transfer, or permanent delegate use) | Probing/draining a wallet would never see in isolation across programs |
 
 Plus, across shipped and roadmap:
 
 - ✓ **Real-time monitoring** : live WebSocket RPC stream with multi-program support and the Programs sidebar filter
 - ✓ **Threshold alert rules** : REST CRUD on `/api/alerts` with per-rule webhook delivery and 30s dedup cooldown, fires against rolling window metrics (error rate, tx count, CU averages)
 - ◐ **Alert-to-investigation handoff** : webhooks + WebSocket broadcast + TUI alerts panel ship today; click-through from a fired alert to the transaction deep-dive lands with Phase 2.5 Feature C
-- ○ **Multi-program suspicious correlation** : cross-program signer tracker that fires when one wallet touches multiple monitored programs in suspicious patterns within a short window. Phase 2.5 Feature B, Apr 19 progress checkpoint
+- ✓ **Multi-program suspicious correlation** : cross-program signer tracker that fires when one wallet touches multiple monitored programs in suspicious patterns (failed-then-success, large transfers, or permanent-delegate use) within a short window. Configurable via `CORRELATION_MIN_PROGRAMS` / `CORRELATION_WINDOW_SECS`.
 - ○ **Alert rule editor with live-eval preview** : interactive in-TUI rule authoring with a preview pane showing which recent txs would have triggered. Phase 4 Tier A, ships in the May 1-4 slot if there's room
 
 ### Shared platform
@@ -151,8 +152,9 @@ cargo run -p gulfwatch-tui
 | `Tab` / `Shift-Tab` | Cycle through all four panels |
 | `1`–`9` | Filter Transactions / Metrics / Alerts to program _N_ |
 | `a` | Clear filter, return to "All" merged view |
-| `j`/`k` or `Up`/`Down` | Scroll / move selection (scrolls Metrics when focused) |
+| `j`/`k` or `Up`/`Down` | Scroll / move selection (scrolls Metrics when focused, scrolls active tab in detail view) |
 | `Enter` | Open detail view (or commit sidebar selection as the filter) |
+| `←`/`→` or `h`/`l` | Cycle tabs inside the transaction detail view (Overview / Instructions / Logs / Accounts / Diff / Errors) |
 | `Esc` / `Backspace` | Back to dashboard |
 | `q` / `Ctrl-C` | Quit |
 
@@ -166,8 +168,10 @@ cargo run -p gulfwatch-tui
 | `MONITOR_PROGRAM` | Yes\* | Single program ID fallback. Accepted when `MONITOR_PROGRAMS` is not set, kept for backward compatibility. |
 | `LISTEN_ADDR` | No | Server listen address (default: `0.0.0.0:3001`) |
 | `WATCHED_ACCOUNTS` | No | Comma-separated SPL token account addresses to watch for large outbound transfers. Empty → large-transfer detection is inert. |
-| `LARGE_TRANSFER_THRESHOLD` | No | Minimum transfer amount in raw token units (smallest denomination) that fires the large-transfer alert. Unset → detection is inert. |
+| `LARGE_TRANSFER_THRESHOLD` | No | Minimum transfer amount in raw token units (smallest denomination) that fires the large-transfer alert. Unset → detection is inert. Also gates the `large_transfer` suspicion kind inside cross-program correlation. |
 | `ROLLING_WINDOW_MINUTES` | No | Rolling window size for metrics and detection (default: `10`). |
+| `CORRELATION_MIN_PROGRAMS` | No | Distinct monitored programs one signer must touch with the same suspicion kind to fire cross-program correlation (default: `3`). Set to `1` to mute. |
+| `CORRELATION_WINDOW_SECS` | No | Sliding window over which cross-program correlation counts touches (default: `300`). |
 
 \* At least one of `MONITOR_PROGRAMS` or `MONITOR_PROGRAM` must be set.
 
@@ -208,6 +212,7 @@ DELETE /api/programs/{id}
 GET  /api/metrics/summary           ?program=...
 GET  /api/metrics/timeseries        ?program=...&interval=60
 GET  /api/transactions/recent       ?program=...&limit=50&category=...&classifier=...&min_confidence=...&has_debug=true
+GET  /api/transactions/{signature}  Full decoded transaction (404 if not in rolling window)
 GET  /api/alerts
 POST /api/alerts                    { AlertRule JSON }
 PUT  /api/alerts/{id}
