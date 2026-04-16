@@ -12,8 +12,8 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use gulfwatch_core::detections::{
-    AuthorityChangeDetection, DefaultAccountStateFrozenDetection, Detection,
-    FailedTxClusterDetection, LargeTransferDetection, PermanentDelegateDetection,
+    AuthorityChangeDetection, CrossProgramCorrelationDetection, DefaultAccountStateFrozenDetection,
+    Detection, FailedTxClusterDetection, LargeTransferDetection, PermanentDelegateDetection,
     TransferFeeAuthorityChangeDetection, TransferHookUpgradeDetection,
 };
 use gulfwatch_core::pipeline::{run_processing_worker, WorkerHandle};
@@ -46,6 +46,8 @@ async fn main() -> io::Result<()> {
     let worker_handle = WorkerHandle::from(&state);
     let watched_accounts = parse_watched_accounts();
     let large_transfer_threshold = parse_large_transfer_threshold();
+    let correlation_min_programs = parse_correlation_min_programs();
+    let correlation_window_secs = parse_correlation_window_secs();
     let detections: Vec<Box<dyn Detection>> = vec![
         Box::new(AuthorityChangeDetection),
         Box::new(FailedTxClusterDetection::default()),
@@ -57,6 +59,11 @@ async fn main() -> io::Result<()> {
         Box::new(PermanentDelegateDetection),
         Box::new(TransferFeeAuthorityChangeDetection),
         Box::new(DefaultAccountStateFrozenDetection),
+        Box::new(CrossProgramCorrelationDetection::new(
+            correlation_min_programs,
+            correlation_window_secs,
+            large_transfer_threshold,
+        )),
     ];
     tokio::spawn(run_processing_worker(worker_handle, ingest_rx, detections));
 
@@ -119,6 +126,8 @@ async fn run_app(
                         KeyCode::Esc | KeyCode::Backspace => app.close_detail(),
                         KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
                         KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                        KeyCode::Left | KeyCode::Char('h') => app.prev_detail_tab(),
+                        KeyCode::Right | KeyCode::Char('l') => app.next_detail_tab(),
                         _ => {}
                     }
                 } else {
@@ -167,6 +176,20 @@ fn parse_rolling_window_minutes() -> i64 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(10)
+}
+
+fn parse_correlation_min_programs() -> usize {
+    std::env::var("CORRELATION_MIN_PROGRAMS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3)
+}
+
+fn parse_correlation_window_secs() -> u64 {
+    std::env::var("CORRELATION_WINDOW_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300)
 }
 
 fn load_dotenv() {

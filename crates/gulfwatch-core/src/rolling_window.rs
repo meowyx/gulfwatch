@@ -135,6 +135,14 @@ impl RollingWindow {
             .cloned()
             .collect()
     }
+
+    pub fn find_by_signature(&self, signature: &str) -> Option<Transaction> {
+        self.transactions
+            .iter()
+            .rev()
+            .find(|tx| tx.signature == signature)
+            .cloned()
+    }
 }
 
 #[cfg(test)]
@@ -161,6 +169,9 @@ mod tests {
             cu_profile: None,
             classification: None,
             classification_debug: None,
+            logs: vec![],
+            balance_diff: None,
+            tx_error: None,
         }
     }
 
@@ -216,6 +227,26 @@ mod tests {
         assert_eq!(recent[0].signature, "sig_4");
         assert_eq!(recent[1].signature, "sig_3");
         assert_eq!(recent[2].signature, "sig_2");
+    }
+
+    #[test]
+    fn find_by_signature_returns_match() {
+        let mut window = RollingWindow::new(10);
+        let now = Utc::now();
+        for i in 0..3 {
+            let mut tx = make_tx(true, Some("swap"), now);
+            tx.signature = format!("sig_{}", i);
+            window.push(tx);
+        }
+        let found = window.find_by_signature("sig_1").expect("should find");
+        assert_eq!(found.signature, "sig_1");
+    }
+
+    #[test]
+    fn find_by_signature_returns_none_when_absent() {
+        let mut window = RollingWindow::new(10);
+        window.push(make_tx(true, Some("swap"), Utc::now()));
+        assert!(window.find_by_signature("missing").is_none());
     }
 
     #[test]

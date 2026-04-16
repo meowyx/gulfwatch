@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use gulfwatch_core::alert::AlertEngine;
 use gulfwatch_core::detections::{
-    AuthorityChangeDetection, DefaultAccountStateFrozenDetection, Detection,
-    FailedTxClusterDetection, LargeTransferDetection, PermanentDelegateDetection,
+    AuthorityChangeDetection, CrossProgramCorrelationDetection, DefaultAccountStateFrozenDetection,
+    Detection, FailedTxClusterDetection, LargeTransferDetection, PermanentDelegateDetection,
     TransferFeeAuthorityChangeDetection, TransferHookUpgradeDetection,
 };
 use gulfwatch_core::pipeline::{WorkerHandle, run_processing_worker};
@@ -66,6 +66,16 @@ async fn main() {
         );
     }
 
+    let correlation_min_programs = parse_correlation_min_programs();
+    let correlation_window_secs = parse_correlation_window_secs();
+    if correlation_min_programs > 1 {
+        info!(
+            min_programs = correlation_min_programs,
+            window_secs = correlation_window_secs,
+            "Cross-program correlation detection armed"
+        );
+    }
+
     let detections: Vec<Box<dyn Detection>> = vec![
         Box::new(AuthorityChangeDetection),
         Box::new(FailedTxClusterDetection::default()),
@@ -77,6 +87,11 @@ async fn main() {
         Box::new(PermanentDelegateDetection),
         Box::new(TransferFeeAuthorityChangeDetection),
         Box::new(DefaultAccountStateFrozenDetection),
+        Box::new(CrossProgramCorrelationDetection::new(
+            correlation_min_programs,
+            correlation_window_secs,
+            large_transfer_threshold,
+        )),
     ];
     tokio::spawn(run_processing_worker(worker_handle, ingest_rx, detections));
     tokio::spawn(async move { ingest_client.run().await });
@@ -118,6 +133,20 @@ fn parse_rolling_window_minutes() -> i64 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(10)
+}
+
+fn parse_correlation_min_programs() -> usize {
+    std::env::var("CORRELATION_MIN_PROGRAMS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3)
+}
+
+fn parse_correlation_window_secs() -> u64 {
+    std::env::var("CORRELATION_WINDOW_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300)
 }
 
 fn load_dotenv() {

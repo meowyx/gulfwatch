@@ -127,7 +127,9 @@ async fn metrics_timeseries(
 // ─── Transactions ────────────────────────────────────────
 
 pub fn transaction_routes() -> Router<AppState> {
-    Router::new().route("/api/transactions/recent", get(recent_transactions))
+    Router::new()
+        .route("/api/transactions/recent", get(recent_transactions))
+        .route("/api/transactions/{signature}", get(get_transaction_by_signature))
 }
 
 #[derive(Deserialize)]
@@ -211,6 +213,19 @@ async fn recent_transactions(
             Json(serde_json::to_value(all_txs).unwrap())
         }
     }
+}
+
+async fn get_transaction_by_signature(
+    State(state): State<AppState>,
+    axum::extract::Path(signature): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let windows = state.windows.read().await;
+    for window in windows.values() {
+        if let Some(tx) = window.find_by_signature(&signature) {
+            return Ok(Json(serde_json::to_value(tx).unwrap()));
+        }
+    }
+    Err(StatusCode::NOT_FOUND)
 }
 
 // ─── Prometheus ──────────────────────────────────────────
@@ -356,6 +371,9 @@ mod tests {
             cu_profile: None,
             classification: None,
             classification_debug: None,
+            logs: vec![],
+            balance_diff: None,
+            tx_error: None,
         }
     }
 
@@ -480,6 +498,76 @@ mod tests {
         let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.len(), 1);
         assert_eq!(json[0]["signature"], "test_sig");
+    }
+
+    #[tokio::test]
+    async fn get_transaction_by_signature_returns_full_decoded_tx() {
+        let (state, _rx) = AppState::new(100, 10);
+        state.add_program("prog".to_string()).await;
+        {
+            let mut windows = state.windows.write().await;
+            let window = windows.get_mut("prog").unwrap();
+            let mut tx = make_tx("prog");
+            tx.signature = "deepdive_sig".to_string();
+            tx.logs = vec!["Program prog invoke [1]".to_string(), "Program prog success".to_string()];
+            window.push(tx);
+        }
+        let app = crate::build_router(state);
+        let response = app
+            .oneshot(
+                Request::get("/api/transactions/deepdive_sig")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["signature"], "deepdive_sig");
+        assert_eq!(json["logs"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_transaction_by_signature_returns_404_when_missing() {
+        let (state, _rx) = AppState::new(100, 10);
+        state.add_program("prog".to_string()).await;
+        let app = crate::build_router(state);
+        let response = app
+            .oneshot(
+                Request::get("/api/transactions/missing_sig")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_transaction_by_signature_scans_across_programs() {
+        let (state, _rx) = AppState::new(100, 10);
+        state.add_program("prog_a".to_string()).await;
+        state.add_program("prog_b".to_string()).await;
+        {
+            let mut windows = state.windows.write().await;
+            let mut tx = make_tx("prog_b");
+            tx.signature = "cross_sig".to_string();
+            windows.get_mut("prog_b").unwrap().push(tx);
+        }
+        let app = crate::build_router(state);
+        let response = app
+            .oneshot(
+                Request::get("/api/transactions/cross_sig")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["program_id"], "prog_b");
     }
 
     #[tokio::test]

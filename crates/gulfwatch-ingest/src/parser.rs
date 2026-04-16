@@ -1,5 +1,8 @@
 use chrono::{DateTime, TimeZone, Utc};
-use gulfwatch_core::{parse_logs, InstructionKind, ParsedInstruction, Transaction};
+use gulfwatch_core::{
+    parse_logs, BalanceDiff, InstructionKind, ParsedInstruction, SolDelta, TokenDelta, Transaction,
+    TransactionError,
+};
 use serde_json::Value;
 
 use crate::program_ids::{
@@ -74,6 +77,9 @@ pub fn parse_transaction(
 
     let instruction_type = Transaction::derive_instruction_type(&instructions);
 
+    let balance_diff = extract_balance_diff(meta, &accounts);
+    let tx_error = extract_tx_error(meta);
+
     Some(Transaction {
         signature: signature.to_string(),
         program_id,
@@ -88,7 +94,174 @@ pub fn parse_transaction(
         cu_profile,
         classification: None,
         classification_debug: None,
+        logs: log_messages,
+        balance_diff,
+        tx_error,
     })
+}
+
+fn extract_tx_error(meta: &Value) -> Option<TransactionError> {
+    let err = meta.get("err")?;
+    if err.is_null() {
+        return None;
+    }
+    let raw = serde_json::to_string(err).unwrap_or_else(|_| "<unserializable>".to_string());
+
+    // Top-level string variant — e.g. "BlockhashNotFound", "AlreadyProcessed".
+    if let Some(s) = err.as_str() {
+        return Some(TransactionError {
+            instruction_index: None,
+            kind: s.to_string(),
+            custom_code: None,
+            raw,
+        });
+    }
+
+    // {"InstructionError": [<idx>, <inner>]} — the common per-instruction shape.
+    if let Some(arr) = err.get("InstructionError").and_then(|v| v.as_array()) {
+        let idx = arr.first().and_then(|v| v.as_u64()).map(|n| n as usize);
+        let (kind, custom_code) = match arr.get(1) {
+            Some(Value::String(s)) => (s.clone(), None),
+            Some(Value::Object(map)) => match map.iter().next() {
+                Some((k, v)) if k == "Custom" => {
+                    (k.clone(), v.as_u64().map(|n| n as u32))
+                }
+                Some((k, _)) => (k.clone(), None),
+                None => ("UnknownInstructionError".to_string(), None),
+            },
+            _ => ("UnknownInstructionError".to_string(), None),
+        };
+        return Some(TransactionError {
+            instruction_index: idx,
+            kind,
+            custom_code,
+            raw,
+        });
+    }
+
+    // Fallback — top-level single-key object like {"InsufficientFundsForRent": {...}}.
+    if let Some((k, _)) = err.as_object().and_then(|m| m.iter().next()) {
+        return Some(TransactionError {
+            instruction_index: None,
+            kind: k.clone(),
+            custom_code: None,
+            raw,
+        });
+    }
+
+    None
+}
+
+fn extract_balance_diff(meta: &Value, accounts: &[String]) -> Option<BalanceDiff> {
+    let pre = meta.get("preBalances").and_then(|v| v.as_array());
+    let post = meta.get("postBalances").and_then(|v| v.as_array());
+
+    let mut sol = Vec::new();
+    if let (Some(pre), Some(post)) = (pre, post) {
+        for (i, (p, q)) in pre.iter().zip(post.iter()).enumerate() {
+            let pre_v = p.as_u64().unwrap_or(0);
+            let post_v = q.as_u64().unwrap_or(0);
+            if pre_v != post_v {
+                sol.push(SolDelta {
+                    account: accounts.get(i).cloned().unwrap_or_default(),
+                    account_index: i,
+                    pre_lamports: pre_v,
+                    post_lamports: post_v,
+                    delta_lamports: post_v as i128 - pre_v as i128,
+                });
+            }
+        }
+    }
+
+    let tokens = extract_token_diffs(meta, accounts);
+
+    if sol.is_empty() && tokens.is_empty() {
+        return None;
+    }
+    Some(BalanceDiff { sol, tokens })
+}
+
+fn extract_token_diffs(meta: &Value, accounts: &[String]) -> Vec<TokenDelta> {
+    use std::collections::BTreeMap;
+
+    let pre = meta
+        .get("preTokenBalances")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let post = meta
+        .get("postTokenBalances")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Join key: (account_index, mint). Token Programs constrain a token account to
+    // exactly one mint, but the JSON is sparse on both sides so we still map both.
+    let mut map: BTreeMap<(usize, String), (Option<&Value>, Option<&Value>)> = BTreeMap::new();
+
+    for entry in &pre {
+        if let Some(key) = token_balance_key(entry) {
+            map.entry(key).or_insert((None, None)).0 = Some(entry);
+        }
+    }
+    for entry in &post {
+        if let Some(key) = token_balance_key(entry) {
+            map.entry(key).or_insert((None, None)).1 = Some(entry);
+        }
+    }
+
+    let mut out = Vec::with_capacity(map.len());
+    for ((account_index, mint), (pre_v, post_v)) in map {
+        let pre_amount = pre_v.and_then(token_amount).unwrap_or(0);
+        let post_amount = post_v.and_then(token_amount).unwrap_or(0);
+        if pre_amount == post_amount {
+            continue;
+        }
+        let decimals = pre_v
+            .and_then(token_decimals)
+            .or_else(|| post_v.and_then(token_decimals))
+            .unwrap_or(0);
+        let owner = pre_v
+            .and_then(token_owner)
+            .or_else(|| post_v.and_then(token_owner));
+        out.push(TokenDelta {
+            account: accounts.get(account_index).cloned().unwrap_or_default(),
+            account_index,
+            mint,
+            owner,
+            pre_amount,
+            post_amount,
+            delta: post_amount as i128 - pre_amount as i128,
+            decimals,
+        });
+    }
+    out
+}
+
+fn token_balance_key(entry: &Value) -> Option<(usize, String)> {
+    let idx = entry.get("accountIndex")?.as_u64()? as usize;
+    let mint = entry.get("mint")?.as_str()?.to_string();
+    Some((idx, mint))
+}
+
+fn token_amount(entry: &Value) -> Option<u64> {
+    entry
+        .get("uiTokenAmount")
+        .and_then(|v| v.get("amount"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+}
+
+fn token_decimals(entry: &Value) -> Option<u8> {
+    entry
+        .get("uiTokenAmount")
+        .and_then(|v| v.get("decimals"))
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u8)
+}
+
+fn token_owner(entry: &Value) -> Option<String> {
+    entry.get("owner").and_then(|v| v.as_str()).map(String::from)
 }
 
 // Walks both top-level and inner instructions; top-level first, then inners
@@ -494,6 +667,285 @@ mod tests {
 
         let tx = parse_transaction(&raw, "err_sig", &["program123".to_string()]).unwrap();
         assert!(!tx.success);
+    }
+
+    #[test]
+    fn parse_transaction_preserves_log_messages_for_deep_dive() {
+        let raw = json!({
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 100,
+                "blockTime": 1712000000,
+                "meta": {
+                    "err": null,
+                    "fee": 5000,
+                    "computeUnitsConsumed": 200_000,
+                    "logMessages": [
+                        "Program 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8 invoke [1]",
+                        "Program log: ray_log: ABC=",
+                        "Program 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8 consumed 12345 of 200000 compute units",
+                        "Program 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8 success"
+                    ]
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["wallet", "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"],
+                        "instructions": [{ "programIdIndex": 1, "accounts": [0], "data": "" }]
+                    }
+                }
+            }
+        });
+
+        let tx = parse_transaction(
+            &raw,
+            "log_sig",
+            &["675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(tx.logs.len(), 4);
+        assert!(tx.logs[1].contains("ray_log"));
+        // Logs are kept verbatim and CU profile derived from the same source.
+        assert!(tx.cu_profile.is_some());
+    }
+
+    #[test]
+    fn parse_transaction_extracts_custom_instruction_error() {
+        let raw = json!({
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 100,
+                "blockTime": 1712000000,
+                "meta": {
+                    "err": { "InstructionError": [2, { "Custom": 6004 }] },
+                    "fee": 5000,
+                    "computeUnitsConsumed": 0
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["wallet", "prog"],
+                        "instructions": [{ "programIdIndex": 1, "accounts": [0], "data": "" }]
+                    }
+                }
+            }
+        });
+
+        let tx = parse_transaction(&raw, "custom_err_sig", &["prog".to_string()]).unwrap();
+        assert!(!tx.success);
+        let err = tx.tx_error.expect("error metadata should be parsed");
+        assert_eq!(err.instruction_index, Some(2));
+        assert_eq!(err.kind, "Custom");
+        assert_eq!(err.custom_code, Some(6004));
+    }
+
+    #[test]
+    fn parse_transaction_extracts_named_instruction_error() {
+        let raw = json!({
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 100,
+                "blockTime": 1712000000,
+                "meta": {
+                    "err": { "InstructionError": [0, "AccountNotFound"] },
+                    "fee": 5000,
+                    "computeUnitsConsumed": 0
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["wallet", "prog"],
+                        "instructions": [{ "programIdIndex": 1, "accounts": [0], "data": "" }]
+                    }
+                }
+            }
+        });
+
+        let tx = parse_transaction(&raw, "named_err_sig", &["prog".to_string()]).unwrap();
+        let err = tx.tx_error.expect("error metadata should be parsed");
+        assert_eq!(err.instruction_index, Some(0));
+        assert_eq!(err.kind, "AccountNotFound");
+        assert!(err.custom_code.is_none());
+    }
+
+    #[test]
+    fn parse_transaction_extracts_top_level_string_error() {
+        let raw = json!({
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 100,
+                "blockTime": 1712000000,
+                "meta": {
+                    "err": "BlockhashNotFound",
+                    "fee": 5000,
+                    "computeUnitsConsumed": 0
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["wallet", "prog"],
+                        "instructions": [{ "programIdIndex": 1, "accounts": [0], "data": "" }]
+                    }
+                }
+            }
+        });
+
+        let tx = parse_transaction(&raw, "top_err_sig", &["prog".to_string()]).unwrap();
+        let err = tx.tx_error.expect("error metadata should be parsed");
+        assert!(err.instruction_index.is_none());
+        assert_eq!(err.kind, "BlockhashNotFound");
+    }
+
+    #[test]
+    fn parse_transaction_no_tx_error_when_success() {
+        // The first existing test (parse_transaction_basic_success_fields) already
+        // covers success → success=true; here we confirm the new field is None.
+        let raw = build_raw_with_ix(
+            vec!["wallet", "prog"],
+            1,
+            vec![0],
+            &[9, 0, 0, 0, 0, 0, 0, 0],
+        );
+        let tx = parse_transaction(&raw, "ok_sig", &["prog".to_string()]).unwrap();
+        assert!(tx.tx_error.is_none());
+    }
+
+    #[test]
+    fn parse_transaction_extracts_sol_balance_diff_when_changed() {
+        let raw = json!({
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 100,
+                "blockTime": 1712000000,
+                "meta": {
+                    "err": null,
+                    "fee": 5000,
+                    "computeUnitsConsumed": 0,
+                    "preBalances": [1_000_000_000u64, 500_000_000u64, 0u64],
+                    "postBalances": [999_995_000u64, 500_000_000u64, 0u64]
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["payer", "untouched", "system"],
+                        "instructions": [{ "programIdIndex": 2, "accounts": [0], "data": "" }]
+                    }
+                }
+            }
+        });
+
+        let tx = parse_transaction(&raw, "sol_diff_sig", &["system".to_string()]).unwrap();
+        let diff = tx.balance_diff.expect("balance diff should be present");
+        assert_eq!(diff.sol.len(), 1, "only the changed account is included");
+        assert_eq!(diff.sol[0].account, "payer");
+        assert_eq!(diff.sol[0].account_index, 0);
+        assert_eq!(diff.sol[0].delta_lamports, -5_000);
+        assert!(diff.tokens.is_empty());
+    }
+
+    #[test]
+    fn parse_transaction_extracts_token_balance_diff_with_join() {
+        let raw = json!({
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 100,
+                "blockTime": 1712000000,
+                "meta": {
+                    "err": null,
+                    "fee": 5000,
+                    "computeUnitsConsumed": 0,
+                    "preBalances": [1, 1, 1],
+                    "postBalances": [1, 1, 1],
+                    "preTokenBalances": [
+                        {
+                            "accountIndex": 1,
+                            "mint": "MINT_USDC",
+                            "owner": "alice",
+                            "uiTokenAmount": { "amount": "1000000", "decimals": 6, "uiAmount": 1.0, "uiAmountString": "1" }
+                        }
+                    ],
+                    "postTokenBalances": [
+                        {
+                            "accountIndex": 1,
+                            "mint": "MINT_USDC",
+                            "owner": "alice",
+                            "uiTokenAmount": { "amount": "500000", "decimals": 6, "uiAmount": 0.5, "uiAmountString": "0.5" }
+                        },
+                        {
+                            "accountIndex": 2,
+                            "mint": "MINT_USDC",
+                            "owner": "bob",
+                            "uiTokenAmount": { "amount": "500000", "decimals": 6, "uiAmount": 0.5, "uiAmountString": "0.5" }
+                        }
+                    ]
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["payer", "alice_ata", "bob_ata"],
+                        "instructions": [{ "programIdIndex": 0, "accounts": [], "data": "" }]
+                    }
+                }
+            }
+        });
+
+        let tx = parse_transaction(&raw, "tok_diff_sig", &["payer".to_string()]).unwrap();
+        let diff = tx.balance_diff.expect("balance diff should be present");
+        assert_eq!(diff.tokens.len(), 2);
+
+        let alice = diff.tokens.iter().find(|t| t.account == "alice_ata").unwrap();
+        assert_eq!(alice.delta, -500_000);
+        assert_eq!(alice.decimals, 6);
+        assert_eq!(alice.owner.as_deref(), Some("alice"));
+
+        let bob = diff.tokens.iter().find(|t| t.account == "bob_ata").unwrap();
+        assert_eq!(bob.delta, 500_000);
+        assert_eq!(bob.pre_amount, 0, "newly created account has no pre");
+        assert_eq!(bob.post_amount, 500_000);
+    }
+
+    #[test]
+    fn parse_transaction_balance_diff_none_when_nothing_changes() {
+        let raw = json!({
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 100,
+                "blockTime": 1712000000,
+                "meta": {
+                    "err": null,
+                    "fee": 5000,
+                    "computeUnitsConsumed": 0,
+                    "preBalances": [1_000, 2_000],
+                    "postBalances": [1_000, 2_000]
+                },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["a", "b"],
+                        "instructions": [{ "programIdIndex": 0, "accounts": [], "data": "" }]
+                    }
+                }
+            }
+        });
+
+        let tx = parse_transaction(&raw, "noop_sig", &["a".to_string()]).unwrap();
+        assert!(tx.balance_diff.is_none(), "no changes → no diff struct");
+    }
+
+    #[test]
+    fn parse_transaction_logs_default_to_empty_when_missing() {
+        let raw = json!({
+            "jsonrpc": "2.0",
+            "result": {
+                "slot": 100,
+                "blockTime": 1712000000,
+                "meta": { "err": null, "fee": 5000, "computeUnitsConsumed": 0 },
+                "transaction": {
+                    "message": {
+                        "accountKeys": ["wallet", "prog"],
+                        "instructions": [{ "programIdIndex": 1, "accounts": [0], "data": "" }]
+                    }
+                }
+            }
+        });
+
+        let tx = parse_transaction(&raw, "no_logs_sig", &["prog".to_string()]).unwrap();
+        assert!(tx.logs.is_empty());
+        assert!(tx.cu_profile.is_none());
     }
 
     #[test]

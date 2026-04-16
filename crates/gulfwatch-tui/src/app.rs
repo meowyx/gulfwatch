@@ -3,35 +3,64 @@ use gulfwatch_core::transaction::Transaction;
 use gulfwatch_core::AppState;
 use tokio::sync::broadcast;
 
-/// What the TUI is currently showing.
 pub enum View {
-    /// Main dashboard with 3 panels.
     Dashboard,
-    /// Detail view for a snapshot of the selected transaction.
-    /// Holds its own copy so the live feed can't shift it underneath.
     TransactionDetail(Box<Transaction>),
-    /// Detail view for a snapshot of the selected alert.
     AlertDetail(Box<AlertEvent>),
 }
 
-/// Application state for the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailTab {
+    Overview,
+    Instructions,
+    Logs,
+    Accounts,
+    Diff,
+    Errors,
+}
+
+impl DetailTab {
+    pub const ALL: [DetailTab; 6] = [
+        DetailTab::Overview,
+        DetailTab::Instructions,
+        DetailTab::Logs,
+        DetailTab::Accounts,
+        DetailTab::Diff,
+        DetailTab::Errors,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DetailTab::Overview => "Overview",
+            DetailTab::Instructions => "Instructions",
+            DetailTab::Logs => "Logs",
+            DetailTab::Accounts => "Accounts",
+            DetailTab::Diff => "Diff",
+            DetailTab::Errors => "Errors",
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|t| *t == self).unwrap_or(0)
+    }
+}
+
 pub struct App {
     pub state: AppState,
     tx_rx: broadcast::Receiver<Transaction>,
     alert_rx: broadcast::Receiver<AlertEvent>,
 
-    /// Recent transactions displayed in the feed panel.
     pub transactions: Vec<Transaction>,
-    /// Recent alert events.
     pub alerts: Vec<AlertEvent>,
     pub programs: Vec<String>,
     pub active_panel: usize,
     pub selected: usize,
-    /// None = "All" merged view; Some(i) filters to programs[i].
+    // None = "All" merged view; Some(i) filters to programs[i].
     pub selected_program: Option<usize>,
     pub view: View,
     max_feed_size: usize,
     pub detail_scroll: u16,
+    pub detail_tab: DetailTab,
     pub metrics_scroll: u16,
 }
 
@@ -59,6 +88,7 @@ impl App {
             view: View::Dashboard,
             max_feed_size: 500,
             detail_scroll: 0,
+            detail_tab: DetailTab::Overview,
             metrics_scroll: 0,
         }
     }
@@ -118,7 +148,6 @@ impl App {
         self.alerts.iter().any(|a| a.program_id == program_id)
     }
 
-    /// Non-blocking poll for new transactions and alerts from broadcast channels.
     pub fn poll_updates(&mut self) {
         loop {
             match self.tx_rx.try_recv() {
@@ -210,6 +239,7 @@ impl App {
                 if let Some(tx) = picked {
                     self.view = View::TransactionDetail(Box::new(tx));
                     self.detail_scroll = 0;
+                    self.detail_tab = DetailTab::Overview;
                 }
             }
             PANEL_ALERTS => {
@@ -223,9 +253,28 @@ impl App {
         }
     }
 
-    /// Go back to dashboard view.
     pub fn close_detail(&mut self) {
         self.view = View::Dashboard;
+        self.detail_scroll = 0;
+        self.detail_tab = DetailTab::Overview;
+    }
+
+    pub fn next_detail_tab(&mut self) {
+        if !matches!(self.view, View::TransactionDetail(_)) {
+            return;
+        }
+        let i = self.detail_tab.index();
+        self.detail_tab = DetailTab::ALL[(i + 1) % DetailTab::ALL.len()];
+        self.detail_scroll = 0;
+    }
+
+    pub fn prev_detail_tab(&mut self) {
+        if !matches!(self.view, View::TransactionDetail(_)) {
+            return;
+        }
+        let i = self.detail_tab.index();
+        let n = DetailTab::ALL.len();
+        self.detail_tab = DetailTab::ALL[(i + n - 1) % n];
         self.detail_scroll = 0;
     }
 
@@ -272,6 +321,9 @@ mod tests {
             cu_profile: None,
             classification: None,
             classification_debug: None,
+            logs: vec![],
+            balance_diff: None,
+            tx_error: None,
         }
     }
 
@@ -323,31 +375,87 @@ mod tests {
             fired_at: Utc::now(),
         });
 
-        // Default is "All" — nothing filtered.
         assert_eq!(app.filtered_transactions().count(), 3);
         assert_eq!(app.filtered_alerts().count(), 2);
         assert_eq!(app.focused_program_label(), "All");
 
-        // Select the first monitored program (alpha).
         app.select_program(Some(0));
         assert_eq!(app.focused_program_id(), Some("alpha"));
         assert_eq!(app.filtered_transactions().count(), 2);
         assert_eq!(app.filtered_alerts().count(), 1);
 
-        // Switch to beta.
         app.select_program(Some(1));
         assert_eq!(app.focused_program_id(), Some("beta"));
         assert_eq!(app.filtered_transactions().count(), 1);
         assert_eq!(app.filtered_alerts().count(), 1);
 
-        // Out-of-range select is ignored, filter stays on beta.
         app.select_program(Some(99));
         assert_eq!(app.focused_program_id(), Some("beta"));
 
-        // Back to All.
         app.select_program(None);
         assert_eq!(app.focused_program_id(), None);
         assert_eq!(app.filtered_transactions().count(), 3);
+    }
+
+    #[tokio::test]
+    async fn detail_tab_cycles_forward_and_back() {
+        let (state, _rx) = AppState::new(16, 10);
+        let mut app = App::new(state);
+        app.transactions.push(make_tx());
+        app.open_detail();
+
+        assert_eq!(app.detail_tab, DetailTab::Overview);
+        for expected in [
+            DetailTab::Instructions,
+            DetailTab::Logs,
+            DetailTab::Accounts,
+            DetailTab::Diff,
+            DetailTab::Errors,
+        ] {
+            app.next_detail_tab();
+            assert_eq!(app.detail_tab, expected);
+        }
+        app.next_detail_tab();
+        assert_eq!(app.detail_tab, DetailTab::Overview, "wraps around");
+
+        app.prev_detail_tab();
+        assert_eq!(app.detail_tab, DetailTab::Errors);
+    }
+
+    #[tokio::test]
+    async fn detail_tab_navigation_resets_scroll() {
+        let (state, _rx) = AppState::new(16, 10);
+        let mut app = App::new(state);
+        app.transactions.push(make_tx());
+        app.open_detail();
+        app.scroll_down();
+        app.scroll_down();
+        assert_eq!(app.detail_scroll, 2);
+
+        app.next_detail_tab();
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn detail_tab_navigation_noop_outside_tx_detail() {
+        let (state, _rx) = AppState::new(16, 10);
+        let mut app = App::new(state);
+        app.next_detail_tab();
+        assert_eq!(app.detail_tab, DetailTab::Overview, "no-op on dashboard");
+    }
+
+    #[tokio::test]
+    async fn closing_detail_resets_tab() {
+        let (state, _rx) = AppState::new(16, 10);
+        let mut app = App::new(state);
+        app.transactions.push(make_tx());
+        app.open_detail();
+        app.next_detail_tab();
+        app.next_detail_tab();
+        assert_eq!(app.detail_tab, DetailTab::Logs);
+
+        app.close_detail();
+        assert_eq!(app.detail_tab, DetailTab::Overview);
     }
 
     #[tokio::test]

@@ -141,6 +141,9 @@ mod tests {
             cu_profile: None,
             classification: None,
             classification_debug: None,
+            logs: vec![],
+            balance_diff: None,
+            tx_error: None,
         }
     }
 

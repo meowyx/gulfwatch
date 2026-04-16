@@ -293,7 +293,6 @@ These are the detections on the roadmap but explicitly out of Phase 1. Each is o
 - **Abnormal mint.** Fires when `MintTo` instructions issue tokens without a corresponding deposit elsewhere in the same tx. Catches infinite-mint exploits.
 - **Cross-program invocation anomalies.** Fires when a tx triggers an unusually deep CPI chain or hits programs that wouldn't normally be invoked together.
 - **Historical baselines.** Adapts thresholds to a program's normal activity levels instead of operator-set static values. Requires the persistence layer that Phase 1 deliberately avoids.
-- **Multi-program correlation.** Detects coordinated attacks that touch several monitored programs in sequence.
 
 ## File map
 
@@ -302,6 +301,7 @@ These are the detections on the roadmap but explicitly out of Phase 1. Each is o
 | Authority Change | `crates/gulfwatch-core/src/detections/authority_change.rs` | 7 |
 | Failed Tx Cluster | `crates/gulfwatch-core/src/detections/failed_tx_cluster.rs` | 9 |
 | Large Transfer | `crates/gulfwatch-core/src/detections/large_transfer.rs` | 10 |
+| Cross-Program Correlation | `crates/gulfwatch-core/src/detections/correlation.rs` | 15 |
 | `Detection` trait + module exports | `crates/gulfwatch-core/src/detections/mod.rs` | 2 |
 | Worker that runs all detections | `crates/gulfwatch-core/src/pipeline.rs` | 2 |
 | Server registration | `crates/gulfwatch-server/src/main.rs` | n/a |
