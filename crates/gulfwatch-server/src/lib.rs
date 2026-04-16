@@ -22,10 +22,9 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Start the HTTP server on the given address.
-pub async fn run_server(state: AppState, addr: SocketAddr) {
+pub async fn run_server(state: AppState, addr: SocketAddr) -> std::io::Result<()> {
     let app = build_router(state);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("Server listening on {addr}");
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await
 }

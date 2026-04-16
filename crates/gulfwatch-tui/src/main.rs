@@ -3,6 +3,7 @@ mod ui;
 
 use std::collections::HashSet;
 use std::io;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use app::{App, View};
@@ -11,12 +12,13 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use gulfwatch_core::alert::AlertEngine;
 use gulfwatch_core::detections::{
     AuthorityChangeDetection, CrossProgramCorrelationDetection, DefaultAccountStateFrozenDetection,
     Detection, FailedTxClusterDetection, LargeTransferDetection, PermanentDelegateDetection,
     TransferFeeAuthorityChangeDetection, TransferHookUpgradeDetection,
 };
-use gulfwatch_core::pipeline::{run_processing_worker, WorkerHandle};
+use gulfwatch_core::pipeline::{run_alert_recorder, run_processing_worker, WorkerHandle};
 use gulfwatch_core::AppState;
 use gulfwatch_ingest::client::IngestConfig;
 use gulfwatch_ingest::SolanaIngestClient;
@@ -78,6 +80,31 @@ async fn main() -> io::Result<()> {
     };
     let ingest_client = SolanaIngestClient::new(ingest_config, state.ingest_tx.clone());
     tokio::spawn(async move { ingest_client.run().await });
+
+    tokio::spawn(run_alert_recorder(state.clone(), 500));
+
+    let mut alert_engine = AlertEngine::new(
+        state.alert_rules.clone(),
+        state.windows.clone(),
+        state.alert_broadcast.clone(),
+        30,
+    );
+    tokio::spawn(async move { alert_engine.run(Duration::from_secs(5)).await });
+
+    let listen_addr: SocketAddr = std::env::var("LISTEN_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:3001".to_string())
+        .parse()
+        .expect("invalid LISTEN_ADDR");
+    {
+        let server_state = state.clone();
+        tokio::spawn(async move {
+            // Bind failure here means the port is taken (likely gulfwatch-server is
+            // already running in another terminal). Silent on purpose — the TUI's
+            // alternate screen would eat the message anyway, and the MCP user will
+            // notice immediately when their tools fail to connect.
+            let _ = gulfwatch_server::run_server(server_state, listen_addr).await;
+        });
+    }
 
     let mut app = App::new(state);
     enable_raw_mode()?;

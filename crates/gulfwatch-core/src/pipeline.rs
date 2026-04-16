@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use gulfwatch_classification::{
@@ -19,6 +19,7 @@ pub struct AppState {
     pub tx_broadcast: broadcast::Sender<Transaction>,
     pub alert_broadcast: broadcast::Sender<AlertEvent>,
     pub alert_rules: Arc<RwLock<Vec<AlertRule>>>,
+    pub recent_alerts: Arc<RwLock<VecDeque<AlertEvent>>>,
     pub ingest_tx: mpsc::Sender<Transaction>,
     pub window_minutes: i64,
 }
@@ -35,6 +36,7 @@ impl AppState {
             tx_broadcast,
             alert_broadcast,
             alert_rules: Arc::new(RwLock::new(Vec::new())),
+            recent_alerts: Arc::new(RwLock::new(VecDeque::new())),
             ingest_tx,
             window_minutes,
         };
@@ -60,6 +62,23 @@ impl AppState {
 
         let mut windows = self.windows.write().await;
         windows.remove(program_id);
+    }
+}
+
+pub async fn run_alert_recorder(state: AppState, capacity: usize) {
+    let mut rx = state.alert_broadcast.subscribe();
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                let mut buf = state.recent_alerts.write().await;
+                buf.push_back(event);
+                while buf.len() > capacity {
+                    buf.pop_front();
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
     }
 }
 

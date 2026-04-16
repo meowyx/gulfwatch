@@ -219,13 +219,27 @@ async fn get_transaction_by_signature(
     State(state): State<AppState>,
     axum::extract::Path(signature): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let windows = state.windows.read().await;
-    for window in windows.values() {
-        if let Some(tx) = window.find_by_signature(&signature) {
-            return Ok(Json(serde_json::to_value(tx).unwrap()));
+    {
+        let windows = state.windows.read().await;
+        for window in windows.values() {
+            if let Some(tx) = window.find_by_signature(&signature) {
+                return Ok(Json(serde_json::to_value(tx).unwrap()));
+            }
         }
     }
-    Err(StatusCode::NOT_FOUND)
+
+    let Ok(rpc_url) = std::env::var("SOLANA_RPC_URL") else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let raw = match gulfwatch_ingest::fetch_transaction(&rpc_url, &signature).await {
+        Ok(v) => v,
+        Err(_) => return Err(StatusCode::BAD_GATEWAY),
+    };
+    let monitored = state.monitored_programs.read().await.clone();
+    match gulfwatch_ingest::parser::parse_transaction(&raw, &signature, &monitored) {
+        Some(tx) => Ok(Json(serde_json::to_value(tx).unwrap())),
+        None => Err(StatusCode::NOT_FOUND),
+    }
 }
 
 // ─── Prometheus ──────────────────────────────────────────
@@ -300,7 +314,35 @@ async fn prometheus_metrics(State(state): State<AppState>) -> (StatusCode, [(Str
 pub fn alert_routes() -> Router<AppState> {
     Router::new()
         .route("/api/alerts", get(list_alerts).post(create_alert))
+        .route("/api/alerts/recent", get(recent_alerts))
         .route("/api/alerts/{id}", put(update_alert).delete(delete_alert))
+}
+
+#[derive(Deserialize)]
+struct RecentAlertsQuery {
+    since: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn recent_alerts(
+    State(state): State<AppState>,
+    Query(query): Query<RecentAlertsQuery>,
+) -> Json<serde_json::Value> {
+    let buf = state.recent_alerts.read().await;
+    let since_cutoff = query
+        .since
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    let limit = query.limit.unwrap_or(100);
+
+    let mut events: Vec<&gulfwatch_core::alert::AlertEvent> = buf
+        .iter()
+        .filter(|e| since_cutoff.is_none_or(|cutoff| e.fired_at >= cutoff))
+        .collect();
+    events.sort_by(|a, b| b.fired_at.cmp(&a.fired_at));
+    events.truncate(limit);
+    Json(serde_json::to_value(events).unwrap())
 }
 
 async fn list_alerts(State(state): State<AppState>) -> Json<Vec<AlertRule>> {
@@ -542,6 +584,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn recent_alerts_returns_buffered_events() {
+        use gulfwatch_core::alert::AlertEvent;
+        let (state, _rx) = AppState::new(100, 10);
+        {
+            let mut buf = state.recent_alerts.write().await;
+            let now = chrono::Utc::now();
+            buf.push_back(AlertEvent {
+                rule_id: "r1".to_string(),
+                rule_name: "old".to_string(),
+                program_id: "prog".to_string(),
+                metric: "x".to_string(),
+                value: 1.0,
+                threshold: 0.0,
+                fired_at: now - chrono::Duration::seconds(600),
+            });
+            buf.push_back(AlertEvent {
+                rule_id: "r2".to_string(),
+                rule_name: "new".to_string(),
+                program_id: "prog".to_string(),
+                metric: "x".to_string(),
+                value: 2.0,
+                threshold: 0.0,
+                fired_at: now,
+            });
+        }
+        let app = crate::build_router(state);
+        let response = app
+            .oneshot(
+                Request::get("/api/alerts/recent?limit=10")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 2);
+        assert_eq!(json[0]["rule_name"], "new", "newest first");
+    }
+
+    #[tokio::test]
+    async fn recent_alerts_respects_since_filter() {
+        use gulfwatch_core::alert::AlertEvent;
+        let (state, _rx) = AppState::new(100, 10);
+        let cutoff = chrono::Utc::now();
+        {
+            let mut buf = state.recent_alerts.write().await;
+            buf.push_back(AlertEvent {
+                rule_id: "r1".to_string(),
+                rule_name: "before".to_string(),
+                program_id: "prog".to_string(),
+                metric: "x".to_string(),
+                value: 1.0,
+                threshold: 0.0,
+                fired_at: cutoff - chrono::Duration::seconds(60),
+            });
+            buf.push_back(AlertEvent {
+                rule_id: "r2".to_string(),
+                rule_name: "after".to_string(),
+                program_id: "prog".to_string(),
+                metric: "x".to_string(),
+                value: 2.0,
+                threshold: 0.0,
+                fired_at: cutoff + chrono::Duration::seconds(60),
+            });
+        }
+        let app = crate::build_router(state);
+        let url = format!(
+            "/api/alerts/recent?since={}",
+            urlencoding::encode(&cutoff.to_rfc3339())
+        );
+        let response = app
+            .oneshot(Request::get(&url).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["rule_name"], "after");
     }
 
     #[tokio::test]
