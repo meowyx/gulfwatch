@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 axum = { version = "0.8.8", features = ["json", "ws"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 futures-util = "0.3.32"
 gulfwatch-core = { version = "0.1.0", path = "../gulfwatch-core" }
 gulfwatch-ingest = { version = "0.1.0", path = "../gulfwatch-ingest" }
@@ -16,6 +17,6 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 
 [dev-dependencies]
-chrono = { version = "0.4.44", features = ["serde"] }
 http-body-util = "0.1.3"
 tower = { version = "0.5.3", features = ["util"] }
+urlencoding = "2.1.3"

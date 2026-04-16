@@ -152,28 +152,6 @@ impl SolanaIngestClient {
         &self,
         signature: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let body = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getTransaction",
-            "params": [
-                signature,
-                {
-                    "encoding": "json",
-                    "maxSupportedTransactionVersion": 0
-                }
-            ]
-        });
-
-        let client = reqwest::Client::new();
-        let response = client
-            .post(&self.config.rpc_url)
-            .json(&body)
-            .send()
-            .await?
-            .json::<Value>()
-            .await?;
-
-        Ok(response)
+        Ok(crate::rpc::fetch_transaction(&self.config.rpc_url, signature).await?)
     }
 }

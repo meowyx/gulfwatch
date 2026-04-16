@@ -4,11 +4,13 @@
 
 ### The runtime intelligence layer for Solana
 
-Monitor live program behavior, inspect transactions deeply, profile runtime performance, and detect suspicious activity in one product.
+**Terminal-first for humans. MCP for agents.**
+
+Monitor live program behavior, inspect transactions deeply, profile runtime performance, and detect suspicious activity in a TUI to monitor, or through Claude Code (or any MCP-compatible agent) querying the same live data.
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Solana](https://img.shields.io/badge/solana-9945FF?logo=solana&logoColor=white)](https://solana.com/)
-[![Tests](https://img.shields.io/badge/tests-149%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-151%20passing-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-pre--alpha-yellow)]()
 [![Colosseum](https://img.shields.io/badge/colosseum-hackathon-blueviolet)](https://www.colosseum.org/)
 
@@ -18,7 +20,7 @@ Monitor live program behavior, inspect transactions deeply, profile runtime perf
 
 ---
 
-GulfWatch helps developers and protocol teams understand what their programs are doing in production. Instead of using one tool to notice an issue and another tool to understand it, you do both here.
+GulfWatch helps developers, protocol teams, and agent workflows understand what their programs are doing in production. Instead of bouncing between a tool to notice an issue, another tool to understand it, and a third to ask an LLM about it, all three can be done here, against the same in-memory runtime state.
 
 ## 🚀 Quickstart
 
@@ -26,7 +28,7 @@ GulfWatch helps developers and protocol teams understand what their programs are
 git clone https://github.com/meowyx/gulfwatch.git
 cd gulfwatch
 cp .env.example .env        # then fill in SOLANA_WS_URL, SOLANA_RPC_URL, MONITOR_PROGRAMS
-cargo run -p gulfwatch-tui  # standalone TUI, no server needed
+cargo run -p gulfwatch-tui  # TUI + embedded HTTP/WS/Prometheus surface, all in one
 ```
 
 Once the TUI starts running, then live transactions start streaming into the Programs sidebar. Press arrow keys to filter to a monitored program, `Tab` to cycle panels, `Enter` on a transaction for the detail view.
@@ -48,7 +50,8 @@ GulfWatch closes the gap.
 
 - **For developers** : live transaction feed, decoded instructions (System, SPL Token, **Token 2022** including extensions, ATA, Compute Budget, BPF Loader, more), per-instruction compute unit profiling, transaction deep-dives, account and balance state diffs, failed-transaction analysis, and replay and debugging workflows.
 - **For protocol teams** : real-time multi-program monitoring, **eight security detection rules** running today (authority changes, probing patterns, abnormal transfers, Token 2022 extensions, cross-program signer correlation), threshold alert rules with per-rule webhook delivery, and an interactive alert rule editor with live-eval preview.
-- **Shared platform** : Programs sidebar in the TUI, rolling window metrics, Prometheus `/metrics` endpoint, zero database, runs as a single Rust binary against any Solana RPC endpoint.
+- **For agent workflows** : an MCP server exposing the same runtime layer as structured tools — `recent_transactions`, `get_transaction` (works for *any* mainnet signature, not just monitored programs), `metrics_summary`, `recent_alerts`, and more. Ask Claude Code *"look up signature X and tell me why it failed"* or *"what fired on raydium in the last hour"* against your live rolling window.
+- **Shared platform** : Programs sidebar in the TUI, rolling window metrics, Prometheus `/metrics` endpoint, zero database, runs as a single Rust binary against any Solana RPC endpoint. One ingest feeds the TUI, the MCP, the REST API, and the WebSocket feed.
 
 <details>
 <summary><b>Show the full feature breakdown (shipped vs. roadmap)</b></summary>
@@ -89,13 +92,26 @@ Plus, across shipped and roadmap:
 - ✓ **Multi-program suspicious correlation** : cross-program signer tracker that fires when one wallet touches multiple monitored programs in suspicious patterns (failed-then-success, large transfers, or permanent-delegate use) within a short window. Configurable via `CORRELATION_MIN_PROGRAMS` / `CORRELATION_WINDOW_SECS`.
 - ○ **Alert rule editor with live-eval preview** : interactive in-TUI rule authoring with a preview pane showing which recent txs would have triggered. Phase 4 Tier A, ships in the May 1-4 slot if there's room
 
+### Agent access via MCP
+
+GulfWatch ships an MCP server (`gulfwatch-mcp`) that exposes the runtime layer as structured tools, so any MCP-compatible agent (Claude Code, etc.) queries the same data the TUI shows. The agent surface and the human surface read from one shared in-memory state — there's only ever one Solana ingest.
+
+- ✓ **`get_transaction(signature)`** - full decoded tx for **any** mainnet signature, not just monitored programs. Tries the rolling window first, falls back to Solana RPC `getTransaction` and parses through the same pipeline live ingest uses (instructions, logs, balance_diff, tx_error, cu_profile).
+- ✓ **`recent_transactions(filters)`** - rolling-window feed with classification, program, and confidence filters.
+- ✓ **`recent_alerts(since?)`** - every detection-rule fire (security + threshold), newest first.
+- ✓ **`metrics_summary`**, **`list_programs`**, **`list_alert_rules`** - current state of the runtime layer.
+- ○ **Write tools** (alert rule CRUD, replay invocation, simulate) - read-side proves out first; v0.2.
+
+Setup is two commands and a Claude Code restart — see [Claude Code MCP](#-claude-code-mcp) below.
+
 ### Shared platform
 
+- ✓ **One process for both surfaces** : the TUI binary embeds the full HTTP/WS/Prometheus stack alongside the ratatui UI, so `cargo run -p gulfwatch-tui` is sufficient for the human + agent surfaces. Standalone `gulfwatch-server` binary still available for headless deploys.
 - ✓ **Multi-program monitoring** : watch Raydium, Jupiter, Token 2022, and your own programs in parallel with a single config
 - ✓ **Programs sidebar in the TUI** : live per-program tx counts, alert flags, and keyboard filtering across Transactions / Metrics / Alerts panels
 - ✓ **Rolling window metrics** (error rate, tx volume, compute units, instruction breakdown) computed per program
 - ✓ **Prometheus-compatible `/metrics` endpoint** for Grafana integration
-- ✓ **Zero database** : everything runs in memory against a rolling window, so the server is a single binary with no external dependencies beyond an RPC endpoint
+- ✓ **Zero database** : everything runs in memory against a rolling window, so the binary has no external dependencies beyond an RPC endpoint
 
 For the deep-dive on how each detection works, what it doesn't catch, and how to add a new one: see [`docs/detections.md`](docs/detections.md).
 
@@ -108,9 +124,10 @@ crates/
   gulfwatch-classification/  # transaction semantic classifiers + debug trace
   gulfwatch-core/       # shared types, rolling window, metrics, alerts, pipeline
   gulfwatch-ingest/     # Solana WebSocket RPC client, transaction parsing
+  gulfwatch-mcp/        # MCP server exposing the REST surface to Claude Code (binary)
   gulfwatch-server/     # axum REST API + WebSocket + Prometheus (binary)
   gulfwatch-tui/        # terminal dashboard (binary, standalone)
-web/                    # Next.js dashboard (frontend)
+web/                    # Next.js dashboard (frontend, deferred to post-submission)
 ```
 
 ## ⚙️ Setup
@@ -137,7 +154,7 @@ Without these two vars, the large-transfer detection is silently inert. The othe
 
 ### TUI (terminal dashboard)
 
-Self-contained : connects directly to Solana, no server needed. Supports multi-program monitoring via `MONITOR_PROGRAMS` (comma-separated) in `.env`.
+Self-contained : connects directly to Solana. Also embeds the full HTTP/WebSocket surface (port `LISTEN_ADDR`, default `0.0.0.0:3001`) so the MCP server, the Prometheus endpoint, and any web client can talk to the same in-memory state. One process, one ingest, every surface live. Supports multi-program monitoring via `MONITOR_PROGRAMS` (comma-separated) in `.env`.
 
 ```bash
 cargo run -p gulfwatch-tui
@@ -175,15 +192,15 @@ cargo run -p gulfwatch-tui
 
 \* At least one of `MONITOR_PROGRAMS` or `MONITOR_PROGRAM` must be set.
 
-### Server (REST API + WebSocket)
+### Server (REST API + WebSocket) — headless mode
 
-For the web dashboard frontend. Optionally set `LISTEN_ADDR` (defaults to `0.0.0.0:3001`).
+The TUI binary already embeds the full HTTP/WebSocket/Prometheus surface, so most users only need `cargo run -p gulfwatch-tui`. The standalone `gulfwatch-server` binary exists for headless deployments (no terminal UI, just the HTTP surface — useful for servers or containers). Optionally set `LISTEN_ADDR` (defaults to `0.0.0.0:3001`).
 
 ```bash
 cargo run -p gulfwatch-server
 ```
 
-The server supports comma-separated programs via `MONITOR_PROGRAMS`:
+Both binaries support comma-separated programs via `MONITOR_PROGRAMS`:
 
 ```
 MONITOR_PROGRAMS=675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8,JUP6LkMUjV1hTVo8YS7ZMCwnvzKmqPuqZoFkMjEHpKu
@@ -212,8 +229,9 @@ DELETE /api/programs/{id}
 GET  /api/metrics/summary           ?program=...
 GET  /api/metrics/timeseries        ?program=...&interval=60
 GET  /api/transactions/recent       ?program=...&limit=50&category=...&classifier=...&min_confidence=...&has_debug=true
-GET  /api/transactions/{signature}  Full decoded transaction (404 if not in rolling window)
+GET  /api/transactions/{signature}  Full decoded transaction. Falls back to Solana RPC `getTransaction` if the signature isn't in the rolling window, so it works for any mainnet tx, not just monitored programs.
 GET  /api/alerts
+GET  /api/alerts/recent             ?since=<rfc3339>&limit=100   Ring buffer of recent alert fires (newest first)
 POST /api/alerts                    { AlertRule JSON }
 PUT  /api/alerts/{id}
 DELETE /api/alerts/{id}
@@ -256,6 +274,23 @@ For the full crate-by-crate breakdown, the in-memory state model, and why there'
 
 
 
+## 🤖 Claude Code MCP
+
+GulfWatch ships an MCP server (`gulfwatch-mcp` crate) so Claude Code can query the runtime layer directly. Six read-only tools wrap the REST surface: `recent_transactions`, `get_transaction`, `metrics_summary`, `list_programs`, `list_alert_rules`, `recent_alerts`.
+
+Build + install:
+
+```bash
+cargo build -p gulfwatch-mcp --release
+
+claude mcp add --scope user \
+  --transport stdio \
+  --env GULFWATCH_BASE_URL=http://localhost:3001 \
+  gulfwatch -- /absolute/path/to/gulfwatch/target/release/gulfwatch-mcp
+```
+
+Or commit a project-scoped `.mcp.json` at the repo root so anyone who clones gulfwatch gets the MCP wiring for free. Restart Claude Code (full quit + relaunch), then `/mcp` in a new session shows `gulfwatch` connected. With the TUI running (`cargo run -p gulfwatch-tui` — that's all you need; it embeds the HTTP surface) you can then ask things like *"look up signature X and tell me why it failed"* or *"what alerts fired on raydium in the last hour"* and Claude pulls real data from your rolling window. Full setup + tool reference in [`crates/gulfwatch-mcp/README.md`](crates/gulfwatch-mcp/README.md).
+
 ## 📚 Documentation
 
 Deep-dive docs live in [`docs/`](docs/). Start with [`docs/README.md`](docs/README.md) for the index.
@@ -269,7 +304,7 @@ Deep-dive docs live in [`docs/`](docs/). Start with [`docs/README.md`](docs/READ
 
 ## 📄 License
 
-License TBD — will be finalized pre-submission. Likely MIT or Apache-2.0.
+License TBD - will be finalized pre-submission. Likely MIT or Apache-2.0.
 
 ---
 

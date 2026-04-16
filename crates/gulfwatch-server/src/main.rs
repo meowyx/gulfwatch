@@ -8,7 +8,7 @@ use gulfwatch_core::detections::{
     Detection, FailedTxClusterDetection, LargeTransferDetection, PermanentDelegateDetection,
     TransferFeeAuthorityChangeDetection, TransferHookUpgradeDetection,
 };
-use gulfwatch_core::pipeline::{WorkerHandle, run_processing_worker};
+use gulfwatch_core::pipeline::{WorkerHandle, run_alert_recorder, run_processing_worker};
 use gulfwatch_core::AppState;
 use gulfwatch_ingest::{SolanaIngestClient, client::IngestConfig};
 use tracing::info;
@@ -104,8 +104,12 @@ async fn main() {
     );
     tokio::spawn(async move { alert_engine.run(Duration::from_secs(5)).await });
 
+    tokio::spawn(run_alert_recorder(state.clone(), 500));
+
     info!("GulfWatch ready");
-    gulfwatch_server::run_server(state, listen_addr).await;
+    gulfwatch_server::run_server(state, listen_addr)
+        .await
+        .expect("HTTP server failed");
 }
 
 fn require_env(key: &str) -> String {
