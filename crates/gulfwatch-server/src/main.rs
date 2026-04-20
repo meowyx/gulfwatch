@@ -10,7 +10,7 @@ use gulfwatch_core::detections::{
 };
 use gulfwatch_core::pipeline::{WorkerHandle, run_alert_recorder, run_processing_worker};
 use gulfwatch_core::AppState;
-use gulfwatch_ingest::{SolanaIngestClient, client::IngestConfig};
+use gulfwatch_ingest::{spawn_boot_idl_discovery, SolanaIngestClient, client::IngestConfig};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -46,6 +46,8 @@ async fn main() {
     }
 
     let monitored = state.monitored_programs.read().await.clone();
+    spawn_boot_idl_discovery(state.clone(), rpc_url.clone(), monitored.clone());
+
     let ingest_config = IngestConfig {
         ws_url,
         rpc_url,

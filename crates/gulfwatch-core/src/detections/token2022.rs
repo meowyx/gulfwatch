@@ -124,6 +124,8 @@ mod tests {
             program_id: "token_2022".to_string(),
             kind,
             accounts: vec![],
+            discriminator: None,
+            anchor_name: None,
         }
     }
 

@@ -9,6 +9,7 @@ use tracing::{error, info, warn};
 
 use crate::alert::{AlertEvent, AlertRule};
 use crate::detections::Detection;
+use crate::idl::{AnchorIdl, IdlRegistryEntry, IdlStatus};
 use crate::rolling_window::RollingWindow;
 use crate::transaction::{InstructionKind, Transaction};
 
@@ -20,6 +21,8 @@ pub struct AppState {
     pub alert_broadcast: broadcast::Sender<AlertEvent>,
     pub alert_rules: Arc<RwLock<Vec<AlertRule>>>,
     pub recent_alerts: Arc<RwLock<VecDeque<AlertEvent>>>,
+    pub idls: Arc<RwLock<HashMap<String, IdlRegistryEntry>>>,
+    pub idl_status: Arc<RwLock<HashMap<String, IdlStatus>>>,
     pub ingest_tx: mpsc::Sender<Transaction>,
     pub window_minutes: i64,
 }
@@ -37,6 +40,8 @@ impl AppState {
             alert_broadcast,
             alert_rules: Arc::new(RwLock::new(Vec::new())),
             recent_alerts: Arc::new(RwLock::new(VecDeque::new())),
+            idls: Arc::new(RwLock::new(HashMap::new())),
+            idl_status: Arc::new(RwLock::new(HashMap::new())),
             ingest_tx,
             window_minutes,
         };
@@ -63,6 +68,40 @@ impl AppState {
         let mut windows = self.windows.write().await;
         windows.remove(program_id);
     }
+
+    pub async fn upsert_idl(&self, program_id: &str, idl: AnchorIdl) {
+        let entry = IdlRegistryEntry::from_idl(idl);
+        {
+            let mut idls = self.idls.write().await;
+            idls.insert(program_id.to_string(), entry);
+        }
+        self.set_idl_status(program_id, IdlStatus::Loaded).await;
+    }
+
+    pub async fn set_idl_status(&self, program_id: &str, status: IdlStatus) {
+        let mut statuses = self.idl_status.write().await;
+        statuses.insert(program_id.to_string(), status);
+    }
+
+    pub async fn get_idl_status(&self, program_id: &str) -> Option<IdlStatus> {
+        let statuses = self.idl_status.read().await;
+        statuses.get(program_id).copied()
+    }
+
+    pub async fn get_idl(&self, program_id: &str) -> Option<AnchorIdl> {
+        let idls = self.idls.read().await;
+        idls.get(program_id).map(|entry| entry.idl.clone())
+    }
+
+    pub async fn idl_entry(&self, program_id: &str) -> Option<IdlRegistryEntry> {
+        let idls = self.idls.read().await;
+        idls.get(program_id).cloned()
+    }
+
+    pub async fn remove_idl(&self, program_id: &str) -> bool {
+        let mut idls = self.idls.write().await;
+        idls.remove(program_id).is_some()
+    }
 }
 
 pub async fn run_alert_recorder(state: AppState, capacity: usize) {
@@ -87,6 +126,7 @@ pub struct WorkerHandle {
     pub monitored_programs: Arc<RwLock<Vec<String>>>,
     pub tx_broadcast: broadcast::Sender<Transaction>,
     pub alert_broadcast: broadcast::Sender<AlertEvent>,
+    pub idls: Arc<RwLock<HashMap<String, IdlRegistryEntry>>>,
 }
 
 impl From<&AppState> for WorkerHandle {
@@ -96,6 +136,7 @@ impl From<&AppState> for WorkerHandle {
             monitored_programs: Arc::clone(&state.monitored_programs),
             tx_broadcast: state.tx_broadcast.clone(),
             alert_broadcast: state.alert_broadcast.clone(),
+            idls: Arc::clone(&state.idls),
         }
     }
 }
@@ -132,6 +173,50 @@ pub async fn run_processing_worker(
             }
             continue;
         }
+
+        {
+            let idls = handle.idls.read().await;
+            if !idls.is_empty() {
+                for ix in tx.instructions.iter_mut() {
+                    if ix.anchor_name.is_some() {
+                        continue;
+                    }
+                    let Some(disc) = ix.discriminator else {
+                        continue;
+                    };
+                    if let Some(entry) = idls.get(&ix.program_id) {
+                        if let Some(name) = entry.instruction_discriminators.get(&disc) {
+                            ix.anchor_name = Some(name.clone());
+                        }
+                    }
+                }
+
+                // Resolve against the failing instruction's program_id, not the
+                // outer tx program_id — custom errors bubble up from CPI'd
+                // programs (a Token error on a Jupiter swap carries the Token id).
+                if let Some(err) = tx.tx_error.as_mut() {
+                    if err.anchor_error_name.is_none() {
+                        if let Some(code) = err.custom_code {
+                            let failing_program = err
+                                .instruction_index
+                                .and_then(|idx| tx.instructions.get(idx))
+                                .map(|ix| ix.program_id.as_str());
+                            if let Some(program_id) = failing_program {
+                                if let Some(entry) = idls.get(program_id) {
+                                    if let Some(idl_err) = entry.errors_by_code.get(&code) {
+                                        err.anchor_error_name = Some(idl_err.name.clone());
+                                        err.anchor_error_msg = idl_err.msg.clone();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Re-derive after anchor_name fills in so the headline reflects the
+        // resolved outer instruction instead of an inner transfer CPI.
+        tx.instruction_type = Transaction::derive_instruction_type(&tx.instructions);
 
         let classification_instructions = to_classification_instructions(&tx);
         let classification_context = ClassificationContext {
@@ -327,6 +412,284 @@ mod tests {
 
         assert_eq!(received1.program_id, "prog");
         assert_eq!(received2.program_id, "prog");
+
+        drop(sender);
+        drop(state);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), worker).await;
+    }
+
+    #[tokio::test]
+    async fn worker_resolves_anchor_name_for_matching_discriminator() {
+        use crate::idl::{derive_instruction_discriminator, AnchorIdl, IdlInstruction};
+        use crate::transaction::{InstructionKind, ParsedInstruction};
+
+        let (state, ingest_rx) = AppState::new(100, 10);
+        state.add_program("JUP6LkbZ".to_string()).await;
+
+        let idl = AnchorIdl {
+            version: Some("0.1.0".to_string()),
+            name: "jupiter".to_string(),
+            instructions: vec![IdlInstruction {
+                name: "route".to_string(),
+                accounts: vec![],
+                args: vec![],
+            }],
+            accounts: vec![],
+            types: vec![],
+            errors: vec![],
+            events: vec![],
+            metadata: None,
+        };
+        state.upsert_idl("JUP6LkbZ", idl).await;
+
+        let route_disc = derive_instruction_discriminator("route");
+        let mut tx = make_tx("JUP6LkbZ", true);
+        tx.instructions = vec![
+            ParsedInstruction {
+                program_id: "JUP6LkbZ".to_string(),
+                kind: InstructionKind::Unknown,
+                accounts: vec![],
+                discriminator: Some(route_disc),
+                anchor_name: None,
+            },
+            ParsedInstruction {
+                program_id: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".to_string(),
+                kind: InstructionKind::TokenTransferChecked {
+                    amount: 100,
+                    decimals: 6,
+                },
+                accounts: vec![],
+                discriminator: None,
+                anchor_name: None,
+            },
+        ];
+
+        let mut rx = state.tx_broadcast.subscribe();
+        let sender = state.ingest_tx.clone();
+        let handle = WorkerHandle::from(&state);
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
+
+        sender.send(tx).await.unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(received.instructions[0].anchor_name.as_deref(), Some("route"));
+        assert_eq!(received.instructions[1].anchor_name, None);
+        assert_eq!(received.instruction_type.as_deref(), Some("route"));
+
+        drop(sender);
+        drop(state);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), worker).await;
+    }
+
+    #[tokio::test]
+    async fn upsert_idl_flips_status_to_loaded() {
+        use crate::idl::{AnchorIdl, IdlStatus};
+
+        let (state, _rx) = AppState::new(100, 10);
+        let idl = AnchorIdl {
+            version: None,
+            name: "prog".to_string(),
+            instructions: vec![],
+            accounts: vec![],
+            types: vec![],
+            errors: vec![],
+            events: vec![],
+            metadata: None,
+        };
+        assert_eq!(state.get_idl_status("prog").await, None);
+        state.upsert_idl("prog", idl).await;
+        assert_eq!(state.get_idl_status("prog").await, Some(IdlStatus::Loaded));
+    }
+
+    #[tokio::test]
+    async fn set_idl_status_exposes_loading_and_unavailable_transitions() {
+        use crate::idl::IdlStatus;
+
+        let (state, _rx) = AppState::new(100, 10);
+        state.set_idl_status("prog", IdlStatus::Loading).await;
+        assert_eq!(state.get_idl_status("prog").await, Some(IdlStatus::Loading));
+        state
+            .set_idl_status("prog", IdlStatus::Unavailable)
+            .await;
+        assert_eq!(
+            state.get_idl_status("prog").await,
+            Some(IdlStatus::Unavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_resolves_anchor_error_name_from_failing_instructions_program() {
+        use crate::idl::{AnchorIdl, IdlError};
+        use crate::transaction::{InstructionKind, ParsedInstruction};
+        use crate::tx_error::TransactionError;
+
+        let (state, ingest_rx) = AppState::new(100, 10);
+        state.add_program("JUP6LkbZ".to_string()).await;
+
+        // IDL is registered on the inner program (the one that emits the error),
+        // not on the outer tx program_id — this exercises the CPI resolution path.
+        let inner_idl = AnchorIdl {
+            version: None,
+            name: "jupiter_inner".to_string(),
+            instructions: vec![],
+            accounts: vec![],
+            types: vec![],
+            errors: vec![
+                IdlError {
+                    code: 6000,
+                    name: "SlippageToleranceExceeded".to_string(),
+                    msg: Some("The slippage tolerance was exceeded".to_string()),
+                },
+            ],
+            events: vec![],
+            metadata: None,
+        };
+        state.upsert_idl("INNER_PROGRAM", inner_idl).await;
+
+        let mut tx = make_tx("JUP6LkbZ", false);
+        tx.instructions = vec![
+            ParsedInstruction {
+                program_id: "JUP6LkbZ".to_string(),
+                kind: InstructionKind::Unknown,
+                accounts: vec![],
+                discriminator: None,
+                anchor_name: None,
+            },
+            ParsedInstruction {
+                program_id: "INNER_PROGRAM".to_string(),
+                kind: InstructionKind::Unknown,
+                accounts: vec![],
+                discriminator: None,
+                anchor_name: None,
+            },
+        ];
+        tx.tx_error = Some(TransactionError {
+            instruction_index: Some(1),
+            kind: "Custom".to_string(),
+            custom_code: Some(6000),
+            raw: r#"{"InstructionError":[1,{"Custom":6000}]}"#.to_string(),
+            anchor_error_name: None,
+            anchor_error_msg: None,
+        });
+
+        let mut rx = state.tx_broadcast.subscribe();
+        let sender = state.ingest_tx.clone();
+        let handle = WorkerHandle::from(&state);
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
+
+        sender.send(tx).await.unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let err = received.tx_error.unwrap();
+        assert_eq!(err.anchor_error_name.as_deref(), Some("SlippageToleranceExceeded"));
+        assert_eq!(
+            err.anchor_error_msg.as_deref(),
+            Some("The slippage tolerance was exceeded"),
+        );
+
+        drop(sender);
+        drop(state);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), worker).await;
+    }
+
+    #[tokio::test]
+    async fn worker_leaves_anchor_error_none_when_code_not_in_idl() {
+        use crate::idl::{AnchorIdl, IdlError};
+        use crate::transaction::{InstructionKind, ParsedInstruction};
+        use crate::tx_error::TransactionError;
+
+        let (state, ingest_rx) = AppState::new(100, 10);
+        state.add_program("prog".to_string()).await;
+
+        let idl = AnchorIdl {
+            version: None,
+            name: "prog".to_string(),
+            instructions: vec![],
+            accounts: vec![],
+            types: vec![],
+            errors: vec![IdlError {
+                code: 6000,
+                name: "KnownError".to_string(),
+                msg: None,
+            }],
+            events: vec![],
+            metadata: None,
+        };
+        state.upsert_idl("prog", idl).await;
+
+        let mut tx = make_tx("prog", false);
+        tx.instructions = vec![ParsedInstruction {
+            program_id: "prog".to_string(),
+            kind: InstructionKind::Unknown,
+            accounts: vec![],
+            discriminator: None,
+            anchor_name: None,
+        }];
+        tx.tx_error = Some(TransactionError {
+            instruction_index: Some(0),
+            kind: "Custom".to_string(),
+            custom_code: Some(9999), // not in IDL
+            raw: "{}".to_string(),
+            anchor_error_name: None,
+            anchor_error_msg: None,
+        });
+
+        let mut rx = state.tx_broadcast.subscribe();
+        let sender = state.ingest_tx.clone();
+        let handle = WorkerHandle::from(&state);
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
+
+        sender.send(tx).await.unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let err = received.tx_error.unwrap();
+        assert_eq!(err.anchor_error_name, None);
+        assert_eq!(err.anchor_error_msg, None);
+
+        drop(sender);
+        drop(state);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), worker).await;
+    }
+
+    #[tokio::test]
+    async fn worker_leaves_anchor_name_none_when_no_idl_registered() {
+        use crate::idl::derive_instruction_discriminator;
+        use crate::transaction::{InstructionKind, ParsedInstruction};
+
+        let (state, ingest_rx) = AppState::new(100, 10);
+        state.add_program("prog".to_string()).await;
+
+        // No IDL registered. Tx carries a valid-looking discriminator anyway.
+        let mut tx = make_tx("prog", true);
+        tx.instructions = vec![ParsedInstruction {
+            program_id: "prog".to_string(),
+            kind: InstructionKind::Unknown,
+            accounts: vec![],
+            discriminator: Some(derive_instruction_discriminator("swap")),
+            anchor_name: None,
+        }];
+
+        let mut rx = state.tx_broadcast.subscribe();
+        let sender = state.ingest_tx.clone();
+        let handle = WorkerHandle::from(&state);
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
+
+        sender.send(tx).await.unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(received.instructions[0].anchor_name, None);
 
         drop(sender);
         drop(state);

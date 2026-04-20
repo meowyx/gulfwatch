@@ -2,6 +2,7 @@ pub mod alert;
 pub mod balance_diff;
 pub mod cu_attribution;
 pub mod detections;
+pub mod idl;
 pub mod metrics;
 pub mod pipeline;
 pub mod rolling_window;
@@ -13,6 +14,10 @@ pub use alert::{AlertEngine, AlertEvent, AlertRule};
 pub use balance_diff::{BalanceDiff, SolDelta, TokenDelta};
 pub use tx_error::TransactionError;
 pub use cu_attribution::{CuProfile, Invocation, NATIVE_PROGRAM_CU, parse_logs};
+pub use idl::{
+    derive_discriminator, derive_instruction_discriminator, AnchorIdl, IdlError, IdlInstruction,
+    IdlRegistryEntry, IdlStatus,
+};
 pub use detections::{
     AuthorityChangeDetection, Detection, FailedTxClusterDetection, LargeTransferDetection,
 };

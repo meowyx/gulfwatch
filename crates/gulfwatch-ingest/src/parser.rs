@@ -114,6 +114,8 @@ fn extract_tx_error(meta: &Value) -> Option<TransactionError> {
             kind: s.to_string(),
             custom_code: None,
             raw,
+            anchor_error_name: None,
+            anchor_error_msg: None,
         });
     }
 
@@ -136,6 +138,8 @@ fn extract_tx_error(meta: &Value) -> Option<TransactionError> {
             kind,
             custom_code,
             raw,
+            anchor_error_name: None,
+            anchor_error_msg: None,
         });
     }
 
@@ -146,6 +150,8 @@ fn extract_tx_error(meta: &Value) -> Option<TransactionError> {
             kind: k.clone(),
             custom_code: None,
             raw,
+            anchor_error_name: None,
+            anchor_error_msg: None,
         });
     }
 
@@ -321,10 +327,20 @@ fn parse_single_instruction(ix: &Value, account_keys: &[String]) -> Option<Parse
 
     let kind = classify_instruction(&program_id, &data_bytes);
 
+    let discriminator = if data_bytes.len() >= 8 {
+        let mut d = [0u8; 8];
+        d.copy_from_slice(&data_bytes[..8]);
+        Some(d)
+    } else {
+        None
+    };
+
     Some(ParsedInstruction {
         program_id,
         kind,
         accounts: resolved_accounts,
+        discriminator,
+        anchor_name: None,
     })
 }
 

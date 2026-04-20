@@ -36,6 +36,27 @@ impl CuProfile {
         });
         top
     }
+
+    // Groups depth-1 invocations with their nested CPIs in execution order;
+    // outer vector sorted by top-level CU desc.
+    pub fn top_level_with_children_sorted_by_cu(
+        &self,
+    ) -> Vec<(&Invocation, Vec<&Invocation>)> {
+        let mut groups: Vec<(&Invocation, Vec<&Invocation>)> = Vec::new();
+        for inv in &self.invocations {
+            if inv.depth == 1 {
+                groups.push((inv, Vec::new()));
+            } else if let Some(last) = groups.last_mut() {
+                last.1.push(inv);
+            }
+        }
+        groups.sort_by(|a, b| {
+            let a_cu = a.0.consumed_cu.unwrap_or(NATIVE_PROGRAM_CU);
+            let b_cu = b.0.consumed_cu.unwrap_or(NATIVE_PROGRAM_CU);
+            b_cu.cmp(&a_cu)
+        });
+        groups
+    }
 }
 
 pub fn parse_logs(logs: &[String], reported_total: u64) -> CuProfile {
@@ -348,6 +369,50 @@ mod tests {
         assert_eq!(profile.invocations[0].consumed_cu, Some(3000));
         assert_eq!(profile.summed_top_level, 3000);
         assert!(!profile.verified);
+    }
+
+    #[test]
+    fn top_level_with_children_groups_by_execution_order_and_sorts_desc() {
+        let logs = log(
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]
+             Program ComputeBudget111111111111111111111111111111 success
+             Program OUTER invoke [1]
+             Program MID invoke [2]
+             Program INNER invoke [3]
+             Program INNER consumed 500 of 199500 compute units
+             Program INNER success
+             Program MID consumed 2000 of 199500 compute units
+             Program MID success
+             Program SIBLING invoke [2]
+             Program SIBLING consumed 1500 of 197000 compute units
+             Program SIBLING success
+             Program OUTER consumed 9000 of 200000 compute units
+             Program OUTER success
+             Program SMALL invoke [1]
+             Program SMALL consumed 1000 of 200000 compute units
+             Program SMALL success",
+        );
+        let profile = parse_logs(&logs, 10150);
+        let groups = profile.top_level_with_children_sorted_by_cu();
+
+        assert_eq!(groups.len(), 3, "three top-level invocations");
+
+        // Sorted by CU desc: OUTER (9000), SMALL (1000), ComputeBudget (native, 150).
+        assert_eq!(groups[0].0.program_id, "OUTER");
+        let outer_children: Vec<&str> =
+            groups[0].1.iter().map(|c| c.program_id.as_str()).collect();
+        assert_eq!(outer_children, vec!["MID", "INNER", "SIBLING"]);
+        let outer_depths: Vec<u32> = groups[0].1.iter().map(|c| c.depth).collect();
+        assert_eq!(outer_depths, vec![2, 3, 2]);
+
+        assert_eq!(groups[1].0.program_id, "SMALL");
+        assert!(groups[1].1.is_empty(), "SMALL has no CPIs");
+
+        assert_eq!(
+            groups[2].0.program_id,
+            "ComputeBudget111111111111111111111111111111"
+        );
+        assert!(groups[2].1.is_empty(), "native program has no CPIs");
     }
 
     #[test]

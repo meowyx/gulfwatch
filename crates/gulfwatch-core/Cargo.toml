@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
- chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 gulfwatch-classification = { version = "0.1.0", path = "../gulfwatch-classification" }
 native-tls = "0.2.18"
-  serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
+sha2 = "0.10"
 tokio = { version = "1.51.0", features = ["full"] }
 tokio-native-tls = "0.3.1"
 tracing = "0.1.44"

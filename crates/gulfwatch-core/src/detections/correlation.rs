@@ -216,6 +216,8 @@ mod tests {
             program_id: "any".to_string(),
             kind,
             accounts: vec![],
+            discriminator: None,
+            anchor_name: None,
         }
     }
 
