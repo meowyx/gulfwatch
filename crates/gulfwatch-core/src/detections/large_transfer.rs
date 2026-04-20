@@ -95,6 +95,8 @@ mod tests {
             program_id: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".to_string(),
             kind: InstructionKind::TokenTransfer { amount },
             accounts: vec![source.to_string(), dest.to_string(), "owner".to_string()],
+            discriminator: None,
+            anchor_name: None,
         }
     }
 
@@ -113,6 +115,8 @@ mod tests {
                 dest.to_string(),
                 "owner".to_string(),
             ],
+            discriminator: None,
+            anchor_name: None,
         }
     }
 
@@ -123,6 +127,8 @@ mod tests {
                 name: name.to_string(),
             },
             accounts: vec![],
+            discriminator: None,
+            anchor_name: None,
         }
     }
 

@@ -21,7 +21,7 @@ use gulfwatch_core::detections::{
 use gulfwatch_core::pipeline::{run_alert_recorder, run_processing_worker, WorkerHandle};
 use gulfwatch_core::AppState;
 use gulfwatch_ingest::client::IngestConfig;
-use gulfwatch_ingest::SolanaIngestClient;
+use gulfwatch_ingest::{spawn_boot_idl_discovery, SolanaIngestClient};
 use ratatui::prelude::*;
 
 #[tokio::main]
@@ -71,6 +71,8 @@ async fn main() -> io::Result<()> {
 
     let ws_url = require_env("SOLANA_WS_URL");
     let rpc_url = require_env("SOLANA_RPC_URL");
+
+    spawn_boot_idl_discovery(state.clone(), rpc_url.clone(), program_ids.clone());
 
     let ingest_config = IngestConfig {
         ws_url,

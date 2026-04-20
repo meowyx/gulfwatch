@@ -33,10 +33,19 @@ pub struct ParsedInstruction {
     pub program_id: String,
     pub kind: InstructionKind,
     pub accounts: Vec<String>,
+    // Transient: parser stashes the first 8 bytes of instruction data here,
+    // worker consumes it to resolve `anchor_name`. Not serialized.
+    #[serde(skip)]
+    pub discriminator: Option<[u8; 8]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_name: Option<String>,
 }
 
 impl ParsedInstruction {
     pub fn display_name(&self) -> Option<&str> {
+        if let Some(name) = self.anchor_name.as_deref() {
+            return Some(name);
+        }
         match &self.kind {
             InstructionKind::SetAuthority { .. } => Some("setAuthority"),
             InstructionKind::Upgrade => Some("upgrade"),
@@ -58,11 +67,12 @@ impl ParsedInstruction {
         }
     }
 
-    // Higher = more interesting. Security-relevant instructions outrank
-    // routine ones so a tx containing both a swap and a SetAuthority
-    // reports SetAuthority as its headline instruction_type.
+    // Higher = more interesting. Security-relevant kinds outrank routine
+    // ones so SetAuthority beats a swap for the tx's headline. Anchor-resolved
+    // names get boosted over routine transfers so a Jupiter `route` wins
+    // over its own inner Token `transferChecked` CPIs.
     pub fn headline_priority(&self) -> u8 {
-        match &self.kind {
+        let kind_priority = match &self.kind {
             InstructionKind::SetAuthority { .. } => 100,
             InstructionKind::Upgrade => 99,
             InstructionKind::InitializePermanentDelegate => 98,
@@ -78,6 +88,11 @@ impl ParsedInstruction {
             InstructionKind::SystemTransfer { .. } => 48,
             InstructionKind::Other { .. } => 10,
             InstructionKind::Unknown => 0,
+        };
+        if self.anchor_name.is_some() {
+            kind_priority.max(60)
+        } else {
+            kind_priority
         }
     }
 }
@@ -129,6 +144,8 @@ mod tests {
             program_id: program.to_string(),
             kind,
             accounts: vec![],
+            discriminator: None,
+            anchor_name: None,
         }
     }
 
@@ -177,6 +194,54 @@ mod tests {
             Transaction::derive_instruction_type(&instructions),
             Some("transferChecked".to_string())
         );
+    }
+
+    #[test]
+    fn anchor_name_beats_routine_transfer_for_headline() {
+        let jupiter_route = ParsedInstruction {
+            program_id: "Jup".to_string(),
+            kind: InstructionKind::Unknown,
+            accounts: vec![],
+            discriminator: Some([0; 8]),
+            anchor_name: Some("route".to_string()),
+        };
+        let inner_transfer = ix(
+            "token",
+            InstructionKind::TokenTransferChecked {
+                amount: 100,
+                decimals: 6,
+            },
+        );
+        assert_eq!(
+            Transaction::derive_instruction_type(&[jupiter_route, inner_transfer]),
+            Some("route".to_string()),
+        );
+    }
+
+    #[test]
+    fn anchor_name_does_not_override_security_critical_kind() {
+        let routine_anchor = ParsedInstruction {
+            program_id: "Jup".to_string(),
+            kind: InstructionKind::Unknown,
+            accounts: vec![],
+            discriminator: Some([0; 8]),
+            anchor_name: Some("route".to_string()),
+        };
+        let set_authority = ix("token", InstructionKind::SetAuthority { authority_type: 0 });
+        assert_eq!(
+            Transaction::derive_instruction_type(&[routine_anchor, set_authority]),
+            Some("setAuthority".to_string()),
+        );
+    }
+
+    #[test]
+    fn display_name_prefers_anchor_over_kind() {
+        let mut ix_with_anchor = ix(
+            "token",
+            InstructionKind::TokenTransfer { amount: 100 },
+        );
+        ix_with_anchor.anchor_name = Some("customSwap".to_string());
+        assert_eq!(ix_with_anchor.display_name(), Some("customSwap"));
     }
 
     #[test]

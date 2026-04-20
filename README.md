@@ -10,7 +10,7 @@ Monitor live program behavior, inspect transactions deeply, profile runtime perf
 
 [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Solana](https://img.shields.io/badge/solana-9945FF?logo=solana&logoColor=white)](https://solana.com/)
-[![Tests](https://img.shields.io/badge/tests-151%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-183%20passing-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-pre--alpha-yellow)]()
 [![Colosseum](https://img.shields.io/badge/colosseum-hackathon-blueviolet)](https://www.colosseum.org/)
 
@@ -48,7 +48,7 @@ GulfWatch closes the gap.
 
 **TL;DR**
 
-- **For developers** : live transaction feed, decoded instructions (System, SPL Token, **Token 2022** including extensions, ATA, Compute Budget, BPF Loader, more), per-instruction compute unit profiling, transaction deep-dives, account and balance state diffs, failed-transaction analysis, and replay and debugging workflows.
+- **For developers** : live transaction feed, decoded instructions (System, SPL Token, **Token 2022** including extensions, ATA, Compute Budget, BPF Loader, more), **Anchor IDL decoder** with on-chain auto-discovery so Anchor instruction names and error codes resolve automatically, per-instruction compute unit profiling with nested CPI drill-down, transaction deep-dives, account and balance state diffs, failed-transaction analysis, and replay and debugging workflows.
 - **For protocol teams** : real-time multi-program monitoring, **eight security detection rules** running today (authority changes, probing patterns, abnormal transfers, Token 2022 extensions, cross-program signer correlation), threshold alert rules with per-rule webhook delivery, and an interactive alert rule editor with live-eval preview.
 - **For agent workflows** : an MCP server exposing the same runtime layer as structured tools — `recent_transactions`, `get_transaction` (works for *any* mainnet signature, not just monitored programs), `metrics_summary`, `recent_alerts`, and more. Ask Claude Code *"look up signature X and tell me why it failed"* or *"what fired on raydium in the last hour"* against your live rolling window.
 - **Shared platform** : Programs sidebar in the TUI, rolling window metrics, Prometheus `/metrics` endpoint, zero database, runs as a single Rust binary against any Solana RPC endpoint. One ingest feeds the TUI, the MCP, the REST API, and the WebSocket feed.
@@ -62,11 +62,12 @@ Legend: ✓ shipped, ◐ partial, ○ roadmap.
 
 - ✓ **Live transaction feed** across one or many Solana programs via WebSocket RPC
 - ✓ **Decoded instructions** for System, SPL Token, Token 2022 (including extension instructions), Associated Token Account, Memo, Compute Budget, BPF Loader, Stake, plus prefix-matched coverage for Raydium and Jupiter
-- ✓ **Per-instruction compute unit profiling** reconstructed from `getTransaction` log messages, no extra RPC calls, no custom node
+- ✓ **Per-instruction compute unit profiling** reconstructed from `getTransaction` log messages with a dedicated **CU Profile** tab, sorted bar chart, and depth-2+ CPI drill-down so you can see which nested program ate the budget. No extra RPC calls, no custom node.
 - ✓ **Log inspection** — full transaction logs surface in the TUI detail view alongside the CU profile
-- ✓ **Transaction deep-dives** — tabbed detail view (Overview / Instructions / Logs / Accounts) with `←`/`→` to switch tabs and `GET /api/transactions/:signature` returning the full decoded tx. Account state diff and failed-tx mode land as additional tabs in the next Feature C passes.
+- ✓ **Transaction deep-dives** — 7-tab detail view (Overview / Instructions / CU Profile / Logs / Accounts / Diff / Errors) with `←`/`→` to cycle tabs and `GET /api/transactions/:signature` returning the full decoded tx.
 - ✓ **Account and balance diffs** — structured diff of `preBalances` / `postBalances` / `preTokenBalances` / `postTokenBalances`, surfaced as the **Diff** tab in the TUI deep-dive and in the `/api/transactions/{signature}` JSON.
-- ◐ **Failed transaction analysis** — parsed `InstructionError` with the failing instruction highlighted in the Instructions tab, custom error code, and tail logs surfaced in the new **Errors** tab. Translation of error codes to Anchor IDL names ships with the IDL decoder in Phase 3.
+- ✓ **Failed transaction analysis** — parsed `InstructionError` with the failing instruction highlighted in the Instructions tab, custom error code surfaced in the **Errors** tab, and Anchor error code → name + message translation when an IDL is registered for the failing program.
+- ✓ **Anchor IDL decoder** — upload an IDL JSON via `POST /api/programs/{id}/idl` or let auto-discovery fetch it from on-chain at boot. Derives the 8-byte instruction discriminators and error-code table at upsert time for O(1) resolution. Instruction names resolve in the Instructions tab and the headline `instruction_type`; error names and messages resolve in the Errors tab.
 - ○ **Replay and debugging workflows** — replay any transaction from the rolling window against the current detection rules to see which would have fired. Phase 4 Tier S, Apr 28 – May 3
 
 ### Runtime detection (for protocol teams)
@@ -160,7 +161,7 @@ Self-contained : connects directly to Solana. Also embeds the full HTTP/WebSocke
 cargo run -p gulfwatch-tui
 ```
 
-**Layout:** four panels - **Programs** (left sidebar with per-program tx counts and alert flags), **Transactions**, **Metrics**, **Alerts**.
+**Layout:** four panels - **Programs** (left sidebar with per-program tx counts, alert flags, and IDL status glyph: `✓` loaded, `⋯` discovery in flight, `·` no on-chain IDL), **Transactions**, **Metrics**, **Alerts**.
 
 **Keybindings:**
 
@@ -171,7 +172,7 @@ cargo run -p gulfwatch-tui
 | `a` | Clear filter, return to "All" merged view |
 | `j`/`k` or `Up`/`Down` | Scroll / move selection (scrolls Metrics when focused, scrolls active tab in detail view) |
 | `Enter` | Open detail view (or commit sidebar selection as the filter) |
-| `←`/`→` or `h`/`l` | Cycle tabs inside the transaction detail view (Overview / Instructions / Logs / Accounts / Diff / Errors) |
+| `←`/`→` or `h`/`l` | Cycle tabs inside the transaction detail view (Overview / Instructions / CU Profile / Logs / Accounts / Diff / Errors) |
 | `Esc` / `Backspace` | Back to dashboard |
 | `q` / `Ctrl-C` | Quit |
 
@@ -226,6 +227,9 @@ GET  /health
 GET  /api/programs
 POST /api/programs                  { "program_id": "..." }
 DELETE /api/programs/{id}
+GET  /api/programs/{id}/idl         Returns the stored Anchor IDL, or 404.
+POST /api/programs/{id}/idl         Upsert an Anchor IDL JSON. Derives discriminators + error table.
+DELETE /api/programs/{id}/idl
 GET  /api/metrics/summary           ?program=...
 GET  /api/metrics/timeseries        ?program=...&interval=60
 GET  /api/transactions/recent       ?program=...&limit=50&category=...&classifier=...&min_confidence=...&has_debug=true

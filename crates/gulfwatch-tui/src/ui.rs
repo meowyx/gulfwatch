@@ -1,5 +1,6 @@
 use gulfwatch_core::alert::AlertEvent;
-use gulfwatch_core::cu_attribution::NATIVE_PROGRAM_CU;
+use gulfwatch_core::cu_attribution::{Invocation, NATIVE_PROGRAM_CU};
+use gulfwatch_core::idl::IdlStatus;
 use gulfwatch_core::transaction::Transaction;
 use ratatui::{
     prelude::*,
@@ -116,6 +117,7 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     ));
 
     let windows = app.state.windows.try_read().ok();
+    let idl_status = app.state.idl_status.try_read().ok();
 
     for (i, pid) in app.programs.iter().enumerate() {
         let row_idx = i + 1; // row 0 is All
@@ -142,6 +144,13 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
         let flag = if has_alert { "⚑" } else { " " };
         let flag_color = if has_alert { ALERT_COLOR } else { DIM_COLOR };
 
+        let (idl_glyph, idl_color) = match idl_status.as_ref().and_then(|m| m.get(pid)) {
+            Some(IdlStatus::Loaded) => ("✓", SUCCESS_COLOR),
+            Some(IdlStatus::Loading) => ("⋯", HEADER_COLOR),
+            Some(IdlStatus::Unavailable) => ("·", DIM_COLOR),
+            None => (" ", DIM_COLOR),
+        };
+
         let row_style = if selected {
             Style::default().bg(SELECTED_BG).fg(Color::White).bold()
         } else if focused {
@@ -152,6 +161,8 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
 
         lines.push(Line::from(vec![
             Span::styled(format!(" {} ", cursor), row_style),
+            Span::styled(idl_glyph.to_string(), Style::default().fg(idl_color).bold()),
+            Span::styled(" ", row_style),
             Span::styled(short_program_id(pid), row_style),
             Span::styled(format!(" {:>4}", tx_count), row_style),
             Span::styled(" ", row_style),
@@ -594,6 +605,7 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
     let lines = match app.detail_tab {
         DetailTab::Overview => tx_overview_lines(tx),
         DetailTab::Instructions => tx_instructions_lines(tx),
+        DetailTab::CuProfile => tx_cu_profile_lines(tx),
         DetailTab::Logs => tx_logs_lines(tx),
         DetailTab::Accounts => tx_accounts_lines(tx),
         DetailTab::Diff => tx_diff_lines(tx),
@@ -702,8 +714,6 @@ fn tx_overview_lines(tx: &Transaction) -> Vec<Line<'static>> {
             ),
         ]),
     ];
-
-    lines.extend(cu_profile_lines(tx));
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -894,18 +904,33 @@ fn tx_errors_lines(tx: &Transaction) -> Vec<Line<'static>> {
         Span::styled("Failed ✗", Style::default().fg(ERROR_COLOR).bold()),
     ]));
     lines.push(Line::from(""));
+    let headline = err.anchor_error_name.as_deref().unwrap_or(err.kind.as_str());
     lines.push(Line::from(vec![
         Span::styled("  Error:     ", Style::default().fg(DIM_COLOR)),
-        Span::styled(err.kind.clone(), Style::default().fg(ERROR_COLOR).bold()),
+        Span::styled(headline.to_string(), Style::default().fg(ERROR_COLOR).bold()),
     ]));
     if let Some(code) = err.custom_code {
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled("  Code:      ", Style::default().fg(DIM_COLOR)),
             Span::styled(format!("{}", code), Style::default().fg(Color::White)),
-            Span::styled(
-                "  (Anchor IDL decoder will translate to a name in Phase 3)",
+        ];
+        if let Some(name) = err.anchor_error_name.as_deref() {
+            spans.push(Span::styled(
+                format!("  → {}", name),
+                Style::default().fg(ERROR_COLOR),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "  (no IDL loaded — POST /api/programs/{id}/idl to resolve)",
                 Style::default().fg(DIM_COLOR),
-            ),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    if let Some(msg) = err.anchor_error_msg.as_deref() {
+        lines.push(Line::from(vec![
+            Span::styled("  Message:   ", Style::default().fg(DIM_COLOR)),
+            Span::styled(msg.to_string(), Style::default().fg(Color::White)),
         ]));
     }
 
@@ -1237,7 +1262,7 @@ fn format_cu(cu: u64) -> String {
     }
 }
 
-fn cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
+fn tx_cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
     let profile = match &tx.cu_profile {
         Some(p) => p,
         None => {
@@ -1254,7 +1279,7 @@ fn cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
         }
     };
 
-    let top_level = profile.top_level_sorted_by_cu();
+    let groups = profile.top_level_with_children_sorted_by_cu();
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
 
@@ -1269,7 +1294,7 @@ fn cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
         Span::styled(badge_text, Style::default().fg(badge_color)),
     ]));
 
-    if top_level.is_empty() {
+    if groups.is_empty() {
         lines.push(Line::from(Span::styled(
             "    (no top-level invocations parsed)",
             Style::default().fg(DIM_COLOR),
@@ -1277,66 +1302,30 @@ fn cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
         return lines;
     }
 
-    let max_cu = top_level
+    let max_cu = groups
         .iter()
-        .map(|inv| inv.consumed_cu.unwrap_or(NATIVE_PROGRAM_CU))
+        .map(|(top, _)| top.consumed_cu.unwrap_or(NATIVE_PROGRAM_CU))
         .max()
         .unwrap_or(1)
         .max(1);
 
-    const BAR_WIDTH: usize = 20;
-
-    for (idx, inv) in top_level.iter().enumerate() {
-        let cu = inv.consumed_cu.unwrap_or(NATIVE_PROGRAM_CU);
-        let pct = if profile.reported_total > 0 {
-            (cu as f64 / profile.reported_total as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let filled = ((cu as f64 / max_cu as f64) * BAR_WIDTH as f64).round() as usize;
-        let filled = filled.clamp(1, BAR_WIDTH);
-        let bar: String = "█".repeat(filled) + &" ".repeat(BAR_WIDTH - filled);
-
-        let pid_short = if inv.program_id.len() > 20 {
-            format!(
-                "{}…{}",
-                &inv.program_id[..10],
-                &inv.program_id[inv.program_id.len() - 4..]
-            )
-        } else {
-            inv.program_id.clone()
-        };
-
-        let is_native = inv.consumed_cu.is_none();
-        let row_color = if inv.failed {
-            ERROR_COLOR
-        } else if is_native {
-            DIM_COLOR
-        } else {
-            Color::White
-        };
-
-        let tags = match (is_native, inv.failed) {
-            (true, true) => " (native, FAILED)".to_string(),
-            (true, false) => " (native)".to_string(),
-            (false, true) => " FAILED".to_string(),
-            (false, false) => String::new(),
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(format!("    [{:>2}] ", idx), Style::default().fg(DIM_COLOR)),
-            Span::styled(
-                format!("{:>10} CU  ", format_cu_full(cu)),
-                Style::default().fg(row_color),
-            ),
-            Span::styled(bar, Style::default().fg(HEADER_COLOR)),
-            Span::styled(format!("  {:>5.1}%  ", pct), Style::default().fg(DIM_COLOR)),
-            Span::styled(
-                format!("{}{}", pid_short, tags),
-                Style::default().fg(row_color),
-            ),
-        ]));
+    for (idx, (top, children)) in groups.iter().enumerate() {
+        lines.push(cu_invocation_row(
+            format!("    [{:>2}] ", idx),
+            top,
+            profile.reported_total,
+            max_cu,
+        ));
+        for child in children {
+            let indent = 4 + 2 * (child.depth as usize - 1);
+            let prefix = format!("{}└─ ", " ".repeat(indent));
+            lines.push(cu_invocation_row(
+                prefix,
+                child,
+                profile.reported_total,
+                max_cu,
+            ));
+        }
     }
 
     lines.push(Line::from(vec![Span::styled(
@@ -1361,6 +1350,66 @@ fn cu_profile_lines(tx: &Transaction) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+fn cu_invocation_row(
+    prefix: String,
+    inv: &Invocation,
+    reported_total: u64,
+    max_cu: u64,
+) -> Line<'static> {
+    const BAR_WIDTH: usize = 20;
+
+    let cu = inv.consumed_cu.unwrap_or(NATIVE_PROGRAM_CU);
+    let pct = if reported_total > 0 {
+        (cu as f64 / reported_total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let filled = ((cu as f64 / max_cu as f64) * BAR_WIDTH as f64).round() as usize;
+    let filled = filled.clamp(1, BAR_WIDTH);
+    let bar: String = "█".repeat(filled) + &" ".repeat(BAR_WIDTH - filled);
+
+    let pid_short = if inv.program_id.len() > 20 {
+        format!(
+            "{}…{}",
+            &inv.program_id[..10],
+            &inv.program_id[inv.program_id.len() - 4..]
+        )
+    } else {
+        inv.program_id.clone()
+    };
+
+    let is_native = inv.consumed_cu.is_none();
+    let row_color = if inv.failed {
+        ERROR_COLOR
+    } else if is_native {
+        DIM_COLOR
+    } else {
+        Color::White
+    };
+
+    let tags = match (is_native, inv.failed) {
+        (true, true) => " (native, FAILED)".to_string(),
+        (true, false) => " (native)".to_string(),
+        (false, true) => " FAILED".to_string(),
+        (false, false) => String::new(),
+    };
+
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(DIM_COLOR)),
+        Span::styled(
+            format!("{:>10} CU  ", format_cu_full(cu)),
+            Style::default().fg(row_color),
+        ),
+        Span::styled(bar, Style::default().fg(HEADER_COLOR)),
+        Span::styled(format!("  {:>5.1}%  ", pct), Style::default().fg(DIM_COLOR)),
+        Span::styled(
+            format!("{}{}", pid_short, tags),
+            Style::default().fg(row_color),
+        ),
+    ])
 }
 
 fn format_cu_full(cu: u64) -> String {

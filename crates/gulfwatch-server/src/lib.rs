@@ -13,6 +13,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(routes::health_routes())
         .merge(routes::program_routes())
+        .merge(routes::idl_routes())
         .merge(routes::metrics_routes())
         .merge(routes::transaction_routes())
         .merge(routes::prometheus_routes())

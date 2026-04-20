@@ -65,6 +65,60 @@ async fn remove_program(
     StatusCode::NO_CONTENT
 }
 
+// ─── Program IDL ─────────────────────────────────────────
+
+pub fn idl_routes() -> Router<AppState> {
+    Router::new().route(
+        "/api/programs/{id}/idl",
+        get(get_idl).post(upsert_idl).delete(delete_idl),
+    )
+}
+
+#[derive(Serialize)]
+struct IdlUpsertResponse {
+    program_id: String,
+    name: String,
+    instruction_count: usize,
+    error_count: usize,
+}
+
+async fn upsert_idl(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(idl): Json<gulfwatch_core::AnchorIdl>,
+) -> (StatusCode, Json<IdlUpsertResponse>) {
+    info!(program_id = %id, name = %idl.name, "Upserting IDL");
+    let response = IdlUpsertResponse {
+        program_id: id.clone(),
+        name: idl.name.clone(),
+        instruction_count: idl.instructions.len(),
+        error_count: idl.errors.len(),
+    };
+    state.upsert_idl(&id, idl).await;
+    (StatusCode::OK, Json(response))
+}
+
+async fn get_idl(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<gulfwatch_core::AnchorIdl>, StatusCode> {
+    match state.get_idl(&id).await {
+        Some(idl) => Ok(Json(idl)),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+async fn delete_idl(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> StatusCode {
+    if state.remove_idl(&id).await {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
 // ─── Metrics ─────────────────────────────────────────────
 
 pub fn metrics_routes() -> Router<AppState> {
@@ -725,5 +779,217 @@ mod tests {
         assert_eq!(json.len(), 1);
         assert_eq!(json[0]["classification"]["category"], "defi_swap");
         assert_eq!(json[0]["classification"]["classifier"], "swap");
+    }
+
+    // ─── IDL routes ──────────────────────────────────────
+
+    const SAMPLE_IDL: &str = r#"{
+        "version": "0.1.0",
+        "name": "jupiter",
+        "instructions": [
+            {"name": "route"},
+            {"name": "swap"}
+        ],
+        "errors": [
+            {"code": 6000, "name": "SlippageExceeded", "msg": "too much slippage"},
+            {"code": 6001, "name": "InvalidRoute"}
+        ]
+    }"#;
+
+    #[tokio::test]
+    async fn post_idl_stores_and_returns_counts() {
+        let (state, _rx) = AppState::new(100, 10);
+        let app = crate::build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::post("/api/programs/jup_prog/idl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(SAMPLE_IDL))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["program_id"], "jup_prog");
+        assert_eq!(json["name"], "jupiter");
+        assert_eq!(json["instruction_count"], 2);
+        assert_eq!(json["error_count"], 2);
+    }
+
+    #[tokio::test]
+    async fn get_idl_roundtrips_stored_payload() {
+        let (state, _rx) = AppState::new(100, 10);
+        let app = crate::build_router(state);
+
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::post("/api/programs/prog_x/idl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(SAMPLE_IDL))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::get("/api/programs/prog_x/idl")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "jupiter");
+        assert_eq!(json["instructions"].as_array().unwrap().len(), 2);
+        assert_eq!(json["errors"][0]["code"], 6000);
+    }
+
+    #[tokio::test]
+    async fn idl_upload_does_not_require_program_to_be_monitored() {
+        // Loose model: IDL registry is decoupled from the monitor list.
+        let (state, _rx) = AppState::new(100, 10);
+        assert!(
+            state.monitored_programs.read().await.is_empty(),
+            "no monitored programs"
+        );
+        let app = crate::build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::post("/api/programs/unmonitored/idl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(SAMPLE_IDL))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_idl_for_unknown_program_returns_404() {
+        let (state, _rx) = AppState::new(100, 10);
+        let app = crate::build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::get("/api/programs/missing/idl")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_idl_removes_and_second_delete_is_404() {
+        let (state, _rx) = AppState::new(100, 10);
+        let app = crate::build_router(state);
+
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::post("/api/programs/prog_y/idl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(SAMPLE_IDL))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::delete("/api/programs/prog_y/idl")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let response = app
+            .oneshot(
+                Request::delete("/api/programs/prog_y/idl")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn post_idl_with_missing_name_is_rejected() {
+        let (state, _rx) = AppState::new(100, 10);
+        let app = crate::build_router(state);
+
+        let invalid = r#"{"instructions":[]}"#;
+        let response = app
+            .oneshot(
+                Request::post("/api/programs/bad/idl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(invalid))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "expected 4xx for missing required field, got {}",
+            response.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_idl_is_upsert_not_append() {
+        let (state, _rx) = AppState::new(100, 10);
+        let app = crate::build_router(state);
+
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::post("/api/programs/prog_z/idl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(SAMPLE_IDL))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let v2 = r#"{"name":"jupiter_v2","instructions":[{"name":"newOp"}]}"#;
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::post("/api/programs/prog_z/idl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(v2))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::get("/api/programs/prog_z/idl")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "jupiter_v2");
+        assert_eq!(json["instructions"].as_array().unwrap().len(), 1);
     }
 }

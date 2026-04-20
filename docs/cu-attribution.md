@@ -100,13 +100,16 @@ Pulled forward from Phase 3 because the spike finished with time to spare and th
 - [x] REST endpoints that return `Transaction` (`/api/transactions/recent`, WebSocket feed) now automatically include the profile in their JSON response shape.
 - [x] TUI: CU Profile section in the existing transaction detail view (between Fee and Accounts), top-level invocations sorted by CU desc with a 20-char text bar chart, verified/incomplete badge, percentage of total, native program tag, FAILED tag, total line, and native-overhead summary. Graceful fallback when `cu_profile` is `None` or top-level is empty.
 
-### Remaining (unblocked — can ship any time)
+### Remaining
 
-- [ ] **Wiring test in `gulfwatch-ingest::parser`** — one integration test that feeds a mock `getTransaction` JSON with real-looking `logMessages` through `parse_transaction` and asserts the resulting `Transaction.cu_profile` is `Some(_)` with the expected top-level breakdown. Deferred because `gulfwatch-core::cu_attribution` has 12 unit tests and the wiring is a ~20-line adapter, but worth adding before the hackathon submission so regressions in the adapter get caught.
-- [ ] **`GET /api/transactions/:signature`** — tracked under Phase 2.5 Feature C (Apr 17-18) in `plan.md`. The profile is already on the in-memory `Transaction` in the rolling window, so this endpoint only needs to look up by signature and serialize — no CU-specific work.
-- [ ] **Web CU profile tab** on `/tx/<signature>` with a Recharts horizontal bar chart (teammate, after Feature C lands).
-- [ ] **Drill-down into nested CPIs** — every `Invocation` in the profile already carries its depth and consumed value, so the backend data is sufficient. Only the TUI/web render needs a depth-2+ expansion. Can land as a Phase 3 polish pass.
-- [ ] **Dedicated "CU profile" tab** (as opposed to a panel inside the existing detail view) once the Feature C deep-dive tab scaffolding lands Apr 17-18. The current placement as a panel inside `draw_tx_detail` is the working version — lift it into a proper tab when the tab container exists.
+- [ ] **Wiring test in `gulfwatch-ingest::parser`** — one integration test that feeds a mock `getTransaction` JSON with real-looking `logMessages` through `parse_transaction` and asserts the resulting `Transaction.cu_profile` is `Some(_)` with the expected top-level breakdown. Core parser has 13 unit tests (including the grouping helper), but this catches regressions in the ~20-line adapter between core and ingest.
+- [ ] **Web CU profile tab** on `/tx/<signature>` with a horizontal bar chart — deferred to post-submission along with the rest of the web dashboard.
+
+### Shipped since this doc was written
+
+- [x] **`GET /api/transactions/:signature`** — shipped 2026-04-16 in `gulfwatch-server/src/routes.rs::get_transaction_by_signature`, returns the full `Transaction` including `cu_profile`.
+- [x] **Drill-down into nested CPIs** — shipped 2026-04-20. `CuProfile::top_level_with_children_sorted_by_cu` groups each top-level with its children in execution order; the TUI renders them indented with a `└─` tree prefix (2 spaces per depth level past 1) under each parent.
+- [x] **Dedicated "CU Profile" tab** — shipped 2026-04-20. Lifted out of the Overview panel into its own tab between Instructions and Logs. `DetailTab::ALL` now has 7 entries.
 
 ## Decisions locked in
 
