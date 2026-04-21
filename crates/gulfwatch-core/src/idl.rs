@@ -323,6 +323,10 @@ fn parse_codama(mut value: Value) -> Result<IdlDocument, IdlParseError> {
     let instructions = parse_codama_instructions(program.remove("instructions").unwrap_or_default())?;
     let accounts = parse_codama_type_refs(program.remove("accounts").unwrap_or_default());
     let errors = parse_codama_errors(program.remove("errors").unwrap_or_default())?;
+    let types = match program.remove("definedTypes") {
+        Some(Value::Array(a)) => a,
+        _ => Vec::new(),
+    };
 
     Ok(IdlDocument {
         name,
@@ -332,7 +336,7 @@ fn parse_codama(mut value: Value) -> Result<IdlDocument, IdlParseError> {
         accounts,
         events: Vec::new(),
         errors,
-        types: Vec::new(),
+        types,
         metadata: None,
         format: IdlFormat::Codama,
     })

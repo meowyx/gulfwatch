@@ -1,8 +1,9 @@
 # IDL loading
 
 How GulfWatch finds, parses, and registers Solana program IDLs so that
-transactions get human-readable instruction names and error names instead of
-opaque discriminator bytes. If a program shows up in the TUI sidebar with a
+transactions get human-readable instruction names, error names, and
+argument values (rendered on the **Explain** tab) instead of opaque
+discriminator bytes. If a program shows up in the TUI sidebar with a
 `·` glyph and you want to know why, start here.
 
 ## The loading order
