@@ -13,6 +13,7 @@ pub enum View {
 pub enum DetailTab {
     Overview,
     Instructions,
+    Explain,
     CuProfile,
     Logs,
     Accounts,
@@ -21,9 +22,10 @@ pub enum DetailTab {
 }
 
 impl DetailTab {
-    pub const ALL: [DetailTab; 7] = [
+    pub const ALL: [DetailTab; 8] = [
         DetailTab::Overview,
         DetailTab::Instructions,
+        DetailTab::Explain,
         DetailTab::CuProfile,
         DetailTab::Logs,
         DetailTab::Accounts,
@@ -35,6 +37,7 @@ impl DetailTab {
         match self {
             DetailTab::Overview => "Overview",
             DetailTab::Instructions => "Instructions",
+            DetailTab::Explain => "Explain",
             DetailTab::CuProfile => "CU Profile",
             DetailTab::Logs => "Logs",
             DetailTab::Accounts => "Accounts",
@@ -410,6 +413,7 @@ mod tests {
         assert_eq!(app.detail_tab, DetailTab::Overview);
         for expected in [
             DetailTab::Instructions,
+            DetailTab::Explain,
             DetailTab::CuProfile,
             DetailTab::Logs,
             DetailTab::Accounts,
@@ -456,7 +460,7 @@ mod tests {
         app.open_detail();
         app.next_detail_tab();
         app.next_detail_tab();
-        assert_eq!(app.detail_tab, DetailTab::CuProfile);
+        assert_eq!(app.detail_tab, DetailTab::Explain);
 
         app.close_detail();
         assert_eq!(app.detail_tab, DetailTab::Overview);

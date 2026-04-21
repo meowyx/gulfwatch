@@ -96,6 +96,7 @@ mod tests {
             kind: InstructionKind::TokenTransfer { amount },
             accounts: vec![source.to_string(), dest.to_string(), "owner".to_string()],
             discriminator: None,
+            data: vec![],
             anchor_name: None,
         }
     }
@@ -116,6 +117,7 @@ mod tests {
                 "owner".to_string(),
             ],
             discriminator: None,
+            data: vec![],
             anchor_name: None,
         }
     }
@@ -128,6 +130,7 @@ mod tests {
             },
             accounts: vec![],
             discriminator: None,
+            data: vec![],
             anchor_name: None,
         }
     }

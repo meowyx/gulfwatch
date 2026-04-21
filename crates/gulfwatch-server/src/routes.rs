@@ -6,8 +6,10 @@ use axum::{
 };
 use gulfwatch_core::AppState;
 use gulfwatch_core::alert::AlertRule;
+use gulfwatch_core::idl::{parse_idl_value, IdlDocument};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use serde_json::Value;
+use tracing::{info, warn};
 
 // ─── Health ──────────────────────────────────────────────
 
@@ -78,30 +80,59 @@ pub fn idl_routes() -> Router<AppState> {
 struct IdlUpsertResponse {
     program_id: String,
     name: String,
+    format: String,
     instruction_count: usize,
     error_count: usize,
+}
+
+#[derive(Serialize)]
+struct IdlUpsertError {
+    program_id: String,
+    error: String,
 }
 
 async fn upsert_idl(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-    Json(idl): Json<gulfwatch_core::AnchorIdl>,
-) -> (StatusCode, Json<IdlUpsertResponse>) {
-    info!(program_id = %id, name = %idl.name, "Upserting IDL");
-    let response = IdlUpsertResponse {
-        program_id: id.clone(),
-        name: idl.name.clone(),
-        instruction_count: idl.instructions.len(),
-        error_count: idl.errors.len(),
-    };
-    state.upsert_idl(&id, idl).await;
-    (StatusCode::OK, Json(response))
+    Json(value): Json<Value>,
+) -> Result<(StatusCode, Json<IdlUpsertResponse>), (StatusCode, Json<IdlUpsertError>)> {
+    match parse_idl_value(value) {
+        Ok(idl) => {
+            info!(
+                program_id = %id,
+                name = %idl.name,
+                format = ?idl.format,
+                "Upserting IDL"
+            );
+            let response = IdlUpsertResponse {
+                program_id: id.clone(),
+                name: idl.name.clone(),
+                format: format!("{:?}", idl.format),
+                instruction_count: idl.instructions.len(),
+                error_count: idl.errors.len(),
+            };
+            state.upsert_idl(&id, idl).await;
+            Ok((StatusCode::OK, Json(response)))
+        }
+        Err(e) => {
+            let reason = e.to_string();
+            warn!(program_id = %id, error = %reason, "IDL upload rejected");
+            state.set_idl_failure(&id, &reason).await;
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(IdlUpsertError {
+                    program_id: id,
+                    error: reason,
+                }),
+            ))
+        }
+    }
 }
 
 async fn get_idl(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> Result<Json<gulfwatch_core::AnchorIdl>, StatusCode> {
+) -> Result<Json<IdlDocument>, StatusCode> {
     match state.get_idl(&id).await {
         Some(idl) => Ok(Json(idl)),
         None => Err(StatusCode::NOT_FOUND),
@@ -930,9 +961,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_idl_with_missing_name_is_rejected() {
+    async fn post_idl_with_unknown_format_returns_400_with_reason_and_records_failure() {
         let (state, _rx) = AppState::new(100, 10);
-        let app = crate::build_router(state);
+        let app = crate::build_router(state.clone());
 
         let invalid = r#"{"instructions":[]}"#;
         let response = app
@@ -944,11 +975,56 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["program_id"], "bad");
         assert!(
-            response.status().is_client_error(),
-            "expected 4xx for missing required field, got {}",
-            response.status()
+            json["error"]
+                .as_str()
+                .map(|s| s.contains("unrecognized IDL format") || s.contains("name"))
+                .unwrap_or(false),
+            "error body should explain the rejection: {}",
+            json["error"]
         );
+
+        // Parse failures must become visible on the TUI via idl_failures.
+        assert_eq!(
+            state.get_idl_failure("bad").await.as_deref().is_some(),
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn post_idl_accepts_anchor_v030_format_with_embedded_discriminator() {
+        let (state, _rx) = AppState::new(100, 10);
+        let app = crate::build_router(state);
+
+        let v030 = r#"{
+            "address": "Prog",
+            "metadata": {"name":"newprog","version":"0.1.0","spec":"0.1.0"},
+            "instructions": [
+                {"name":"swap","discriminator":[229,23,203,151,122,227,173,42]}
+            ]
+        }"#;
+
+        let response = app
+            .oneshot(
+                Request::post("/api/programs/newprog_id/idl")
+                    .header("content-type", "application/json")
+                    .body(Body::from(v030))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "newprog");
+        assert_eq!(json["format"], "AnchorV030");
+        assert_eq!(json["instruction_count"], 1);
     }
 
     #[tokio::test]

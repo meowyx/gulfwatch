@@ -340,6 +340,7 @@ fn parse_single_instruction(ix: &Value, account_keys: &[String]) -> Option<Parse
         kind,
         accounts: resolved_accounts,
         discriminator,
+        data: data_bytes,
         anchor_name: None,
     })
 }

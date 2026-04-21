@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bs58 = "0.5.1"
 chrono = { version = "0.4", features = ["serde"] }
 gulfwatch-classification = { version = "0.1.0", path = "../gulfwatch-classification" }
 native-tls = "0.2.18"

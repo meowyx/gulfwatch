@@ -24,6 +24,35 @@ const HEADER_COLOR: Color = Color::Cyan;
 const DIM_COLOR: Color = Color::DarkGray;
 const SELECTED_BG: Color = Color::Rgb(30, 40, 60);
 
+fn truncate_one_line(s: &str, max: usize) -> String {
+    let flat: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+    if flat.chars().count() <= max {
+        flat
+    } else {
+        let head: String = flat.chars().take(max.saturating_sub(1)).collect();
+        format!("{head}…")
+    }
+}
+
+fn short_reason(reason: &str) -> String {
+    if reason.starts_with("IDL account not found") {
+        return "not published".into();
+    }
+    if reason.starts_with("zstd decompress failed") {
+        return "unknown on-chain format".into();
+    }
+    if reason.starts_with("bad IDL account header") {
+        return "bad on-chain header".into();
+    }
+    if reason.starts_with("rpc error") {
+        return "rpc error".into();
+    }
+    if reason.starts_with("IDL JSON parse failed") || reason.starts_with("unrecognized IDL format") {
+        return "parse failed".into();
+    }
+    truncate_one_line(reason, 24)
+}
+
 pub fn draw(f: &mut Frame, app: &App) {
     match &app.view {
         View::Dashboard => draw_dashboard(f, app),
@@ -118,6 +147,7 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
 
     let windows = app.state.windows.try_read().ok();
     let idl_status = app.state.idl_status.try_read().ok();
+    let idl_failures = app.state.idl_failures.try_read().ok();
 
     for (i, pid) in app.programs.iter().enumerate() {
         let row_idx = i + 1; // row 0 is All
@@ -175,6 +205,16 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(
                     format!("{} err", error_count),
                     Style::default().fg(ERROR_COLOR),
+                ),
+            ]));
+        }
+
+        if let Some(reason) = idl_failures.as_ref().and_then(|m| m.get(pid)) {
+            lines.push(Line::from(vec![
+                Span::styled("     ", Style::default()),
+                Span::styled(
+                    format!("idl: {}", short_reason(reason)),
+                    Style::default().fg(ALERT_COLOR),
                 ),
             ]));
         }
@@ -605,6 +645,7 @@ fn draw_tx_detail(f: &mut Frame, app: &App, tx: &Transaction) {
     let lines = match app.detail_tab {
         DetailTab::Overview => tx_overview_lines(tx),
         DetailTab::Instructions => tx_instructions_lines(tx),
+        DetailTab::Explain => tx_explain_lines(app, tx),
         DetailTab::CuProfile => tx_cu_profile_lines(tx),
         DetailTab::Logs => tx_logs_lines(tx),
         DetailTab::Accounts => tx_accounts_lines(tx),
@@ -1422,4 +1463,178 @@ fn format_cu_full(cu: u64) -> String {
         out.push(ch);
     }
     out.chars().rev().collect()
+}
+
+// ─── Explain tab ─────────────────────────────────────────
+
+const ARG_PALETTE: &[Color] = &[
+    Color::Cyan,
+    Color::Magenta,
+    Color::Green,
+    Color::Blue,
+    Color::LightCyan,
+    Color::LightMagenta,
+    Color::LightGreen,
+    Color::LightBlue,
+];
+
+fn tx_explain_lines(app: &App, tx: &Transaction) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from("")];
+
+    let Some(ix) = tx
+        .instructions
+        .iter()
+        .find(|i| i.program_id == tx.program_id && !i.data.is_empty())
+    else {
+        lines.push(Line::from(Span::styled(
+            "  No top-level instruction data available for this transaction.",
+            Style::default().fg(DIM_COLOR),
+        )));
+        return lines;
+    };
+
+    let program_id = ix.program_id.clone();
+    let data = ix.data.clone();
+
+    let idl_entry_view = app
+        .state
+        .idls
+        .try_read()
+        .ok()
+        .and_then(|guard| guard.get(&program_id).cloned());
+
+    let (ix_name_opt, discriminator_len, decoded_args) = match idl_entry_view.as_ref() {
+        Some(entry) => match entry.instruction_for(&data) {
+            Some((idl_ix, disc_len)) => {
+                let decoded = gulfwatch_core::decode_args(&idl_ix.args, &data, disc_len);
+                (Some(idl_ix.name.clone()), disc_len, decoded)
+            }
+            None => (ix.anchor_name.clone(), 0, Vec::new()),
+        },
+        None => (ix.anchor_name.clone(), 0, Vec::new()),
+    };
+
+    let display_name = ix_name_opt
+        .as_deref()
+        .unwrap_or_else(|| ix.display_name().unwrap_or("<unknown>"))
+        .to_string();
+
+    lines.push(Line::from(vec![
+        Span::styled("  Instruction: ", Style::default().fg(DIM_COLOR)),
+        Span::styled(display_name, Style::default().fg(HEADER_COLOR).bold()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Program:     ", Style::default().fg(DIM_COLOR)),
+        Span::styled(program_id.clone(), Style::default().fg(Color::White)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  Data size:   ", Style::default().fg(DIM_COLOR)),
+        Span::styled(
+            format!("{} bytes", data.len()),
+            Style::default().fg(Color::White),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    let mut byte_colors: Vec<Color> = vec![DIM_COLOR; data.len()];
+    for i in 0..discriminator_len.min(data.len()) {
+        byte_colors[i] = ALERT_COLOR;
+    }
+    for (idx, arg) in decoded_args.iter().enumerate() {
+        let color = ARG_PALETTE[idx % ARG_PALETTE.len()];
+        let start = arg.byte_offset;
+        let end = match arg.byte_length {
+            Some(n) => (start + n).min(data.len()),
+            None => break,
+        };
+        for byte in byte_colors.iter_mut().take(end).skip(start) {
+            *byte = color;
+        }
+    }
+
+    lines.push(Line::from(Span::styled(
+        "  Bytes",
+        Style::default().fg(DIM_COLOR),
+    )));
+    for (row_idx, chunk) in data.chunks(16).enumerate() {
+        let mut spans = Vec::with_capacity(chunk.len() * 3 + 4);
+        spans.push(Span::styled(
+            format!("  {:04x}  ", row_idx * 16),
+            Style::default().fg(DIM_COLOR),
+        ));
+        for (i, byte) in chunk.iter().enumerate() {
+            let abs = row_idx * 16 + i;
+            let color = byte_colors.get(abs).copied().unwrap_or(DIM_COLOR);
+            spans.push(Span::styled(
+                format!("{byte:02x}"),
+                Style::default().fg(color),
+            ));
+            spans.push(Span::raw(" "));
+            if i == 7 {
+                spans.push(Span::raw(" "));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(Span::styled(
+        "  Arguments",
+        Style::default().fg(DIM_COLOR),
+    )));
+
+    if discriminator_len > 0 {
+        let disc_hex = data
+            .iter()
+            .take(discriminator_len)
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        lines.push(Line::from(vec![
+            Span::styled("    ", Style::default()),
+            Span::styled("■ ", Style::default().fg(ALERT_COLOR)),
+            Span::styled("discriminator ", Style::default().fg(Color::White)),
+            Span::styled(
+                format!("[0..{discriminator_len}]  "),
+                Style::default().fg(DIM_COLOR),
+            ),
+            Span::styled(disc_hex, Style::default().fg(ALERT_COLOR)),
+        ]));
+    }
+
+    if decoded_args.is_empty() && idl_entry_view.is_none() {
+        lines.push(Line::from(Span::styled(
+            "    (no IDL loaded for this program — drop one in crates/gulfwatch-ingest/idls/)",
+            Style::default().fg(DIM_COLOR),
+        )));
+    } else if decoded_args.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (IDL loaded but no args on this instruction)",
+            Style::default().fg(DIM_COLOR),
+        )));
+    }
+
+    for (idx, arg) in decoded_args.iter().enumerate() {
+        let color = ARG_PALETTE[idx % ARG_PALETTE.len()];
+        let span_label = match arg.byte_length {
+            Some(n) => format!("[{}..{}]", arg.byte_offset, arg.byte_offset + n),
+            None => format!("[{}..?]", arg.byte_offset),
+        };
+        let mut spans = vec![
+            Span::styled("    ", Style::default()),
+            Span::styled("■ ", Style::default().fg(color)),
+            Span::styled(arg.name.clone(), Style::default().fg(Color::White)),
+            Span::styled("  ", Style::default()),
+            Span::styled(span_label, Style::default().fg(DIM_COLOR)),
+            Span::styled("  ", Style::default()),
+            Span::styled(arg.type_label.clone(), Style::default().fg(HEADER_COLOR)),
+        ];
+        if !arg.value_display.is_empty() {
+            spans.push(Span::styled(" = ", Style::default().fg(DIM_COLOR)));
+            spans.push(Span::styled(arg.value_display.clone(), Style::default().fg(color)));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    lines
 }

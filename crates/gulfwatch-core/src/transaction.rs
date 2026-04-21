@@ -33,10 +33,12 @@ pub struct ParsedInstruction {
     pub program_id: String,
     pub kind: InstructionKind,
     pub accounts: Vec<String>,
-    // Transient: parser stashes the first 8 bytes of instruction data here,
-    // worker consumes it to resolve `anchor_name`. Not serialized.
+    // First 8 bytes of instruction data. Worker consumes for anchor_name lookup.
     #[serde(skip)]
     pub discriminator: Option<[u8; 8]>,
+    // Full instruction data. Skipped from serde so REST/WS payloads stay lean.
+    #[serde(skip)]
+    pub data: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_name: Option<String>,
 }
@@ -145,6 +147,7 @@ mod tests {
             kind,
             accounts: vec![],
             discriminator: None,
+            data: vec![],
             anchor_name: None,
         }
     }
@@ -203,6 +206,7 @@ mod tests {
             kind: InstructionKind::Unknown,
             accounts: vec![],
             discriminator: Some([0; 8]),
+            data: vec![],
             anchor_name: Some("route".to_string()),
         };
         let inner_transfer = ix(
@@ -225,6 +229,7 @@ mod tests {
             kind: InstructionKind::Unknown,
             accounts: vec![],
             discriminator: Some([0; 8]),
+            data: vec![],
             anchor_name: Some("route".to_string()),
         };
         let set_authority = ix("token", InstructionKind::SetAuthority { authority_type: 0 });
