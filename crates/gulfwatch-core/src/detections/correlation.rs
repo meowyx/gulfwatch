@@ -217,6 +217,7 @@ mod tests {
             kind,
             accounts: vec![],
             discriminator: None,
+            data: vec![],
             anchor_name: None,
         }
     }

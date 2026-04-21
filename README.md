@@ -64,10 +64,11 @@ Legend: ✓ shipped, ◐ partial, ○ roadmap.
 - ✓ **Decoded instructions** for System, SPL Token, Token 2022 (including extension instructions), Associated Token Account, Memo, Compute Budget, BPF Loader, Stake, plus prefix-matched coverage for Raydium and Jupiter
 - ✓ **Per-instruction compute unit profiling** reconstructed from `getTransaction` log messages with a dedicated **CU Profile** tab, sorted bar chart, and depth-2+ CPI drill-down so you can see which nested program ate the budget. No extra RPC calls, no custom node.
 - ✓ **Log inspection** — full transaction logs surface in the TUI detail view alongside the CU profile
-- ✓ **Transaction deep-dives** — 7-tab detail view (Overview / Instructions / CU Profile / Logs / Accounts / Diff / Errors) with `←`/`→` to cycle tabs and `GET /api/transactions/:signature` returning the full decoded tx.
+- ✓ **Transaction deep-dives** — 8-tab detail view (Overview / Instructions / Explain / CU Profile / Logs / Accounts / Diff / Errors) with `←`/`→` to cycle tabs and `GET /api/transactions/:signature` returning the full decoded tx.
 - ✓ **Account and balance diffs** — structured diff of `preBalances` / `postBalances` / `preTokenBalances` / `postTokenBalances`, surfaced as the **Diff** tab in the TUI deep-dive and in the `/api/transactions/{signature}` JSON.
-- ✓ **Failed transaction analysis** — parsed `InstructionError` with the failing instruction highlighted in the Instructions tab, custom error code surfaced in the **Errors** tab, and Anchor error code → name + message translation when an IDL is registered for the failing program.
-- ✓ **Anchor IDL decoder** — upload an IDL JSON via `POST /api/programs/{id}/idl` or let auto-discovery fetch it from on-chain at boot. Derives the 8-byte instruction discriminators and error-code table at upsert time for O(1) resolution. Instruction names resolve in the Instructions tab and the headline `instruction_type`; error names and messages resolve in the Errors tab.
+- ✓ **Failed transaction analysis** — parsed `InstructionError` with the failing instruction highlighted in the Instructions tab, custom error code surfaced in the **Errors** tab, and Anchor error code → name + message translation when an IDL is registered for the failing program. Failed transactions also render a `⚠ failed with <error> on instruction #N` banner on the **Explain** tab.
+- ✓ **Explain tab (byte-level decode)** — for the outer instruction of the selected transaction, renders a color-coded hex dump plus a decoded arg panel (`amount: u64 = 1000000`, `route_plan: vec<RoutePlanStep> = [...]`, etc.) driven by the registered IDL. Shift-HJKL scrubs a per-byte cursor with an annotation strip below the dump showing which arg the hovered byte belongs to. Press `Shift-M` to toggle mouse capture on; then click a byte to jump the cursor or scroll the wheel to nudge it. Drag-to-select for copy/paste stays working when mouse capture is off (default). See [`docs/idl-loading.md`](docs/idl-loading.md) for how to add your own program's IDL.
+- ✓ **Multi-format IDL support** — three sources, always tried in order: (1) on-chain `anchor:idl` PDA fetch, which works for any Anchor program that ran `anchor idl init` regardless of compression (zstd for Anchor 0.29, zlib for 0.30+); (2) the runtime IDL directory at `crates/gulfwatch-ingest/idls/` (seeded with Token-2022 and SPL Token in Codama format, extensible by dropping more `.json` files or setting `GULFWATCH_IDL_DIR`); (3) ephemeral uploads via `POST /api/programs/{id}/idl`. Parser handles Anchor 0.29 legacy, Anchor 0.30+, and Codama rootNode. For programs with no IDL at all, a log-based fallback parses `Program log: Instruction: <name>` lines so instruction names still render. Full guide: [`docs/idl-loading.md`](docs/idl-loading.md).
 - ○ **Replay and debugging workflows** — replay any transaction from the rolling window against the current detection rules to see which would have fired. Phase 4 Tier S, Apr 28 – May 3
 
 ### Runtime detection (for protocol teams)
@@ -161,7 +162,7 @@ Self-contained : connects directly to Solana. Also embeds the full HTTP/WebSocke
 cargo run -p gulfwatch-tui
 ```
 
-**Layout:** four panels - **Programs** (left sidebar with per-program tx counts, alert flags, and IDL status glyph: `✓` loaded, `⋯` discovery in flight, `·` no on-chain IDL), **Transactions**, **Metrics**, **Alerts**.
+**Layout:** four panels - **Programs** (left sidebar with per-program tx counts, alert flags, and IDL status glyph: `✓` loaded, `⋯` discovery in flight, `·` no IDL — with a short reason rendered in yellow below the row, e.g. `idl: not published`), **Transactions**, **Metrics**, **Alerts**. Mouse drag-to-select works in any view for copying signatures / addresses / log lines out of the TUI.
 
 **Keybindings:**
 
@@ -172,7 +173,10 @@ cargo run -p gulfwatch-tui
 | `a` | Clear filter, return to "All" merged view |
 | `j`/`k` or `Up`/`Down` | Scroll / move selection (scrolls Metrics when focused, scrolls active tab in detail view) |
 | `Enter` | Open detail view (or commit sidebar selection as the filter) |
-| `←`/`→` or `h`/`l` | Cycle tabs inside the transaction detail view (Overview / Instructions / CU Profile / Logs / Accounts / Diff / Errors) |
+| `←`/`→` or `h`/`l` | Cycle tabs inside the transaction detail view (Overview / Instructions / Explain / CU Profile / Logs / Accounts / Diff / Errors) |
+| `Shift-H` / `Shift-L` | Move the Explain-tab byte cursor ±1 byte |
+| `Shift-J` / `Shift-K` | Move the Explain-tab byte cursor ±16 bytes |
+| `Shift-M` | Toggle mouse capture. Off (default): terminal drag-to-select works for copy/paste. On: left-click a byte in the Explain hex dump to jump the cursor, scroll wheel nudges it ±1. State shown in the bottom status bar. |
 | `Esc` / `Backspace` | Back to dashboard |
 | `q` / `Ctrl-C` | Quit |
 
@@ -188,6 +192,7 @@ cargo run -p gulfwatch-tui
 | `WATCHED_ACCOUNTS` | No | Comma-separated SPL token account addresses to watch for large outbound transfers. Empty → large-transfer detection is inert. |
 | `LARGE_TRANSFER_THRESHOLD` | No | Minimum transfer amount in raw token units (smallest denomination) that fires the large-transfer alert. Unset → detection is inert. Also gates the `large_transfer` suspicion kind inside cross-program correlation. |
 | `ROLLING_WINDOW_MINUTES` | No | Rolling window size for metrics and detection (default: `10`). |
+| `GULFWATCH_IDL_DIR` | No | Extra directory scanned at boot for `.json` IDL files. Entries here override the seed directory (`crates/gulfwatch-ingest/idls/`) on program-id collisions. See [`docs/idl-loading.md`](docs/idl-loading.md). |
 | `CORRELATION_MIN_PROGRAMS` | No | Distinct monitored programs one signer must touch with the same suspicion kind to fire cross-program correlation (default: `3`). Set to `1` to mute. |
 | `CORRELATION_WINDOW_SECS` | No | Sliding window over which cross-program correlation counts touches (default: `300`). |
 

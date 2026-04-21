@@ -10,6 +10,9 @@ pub struct Invocation {
     pub depth: u32,
     pub consumed_cu: Option<u64>,
     pub failed: bool,
+    // Captured from `Program log: Instruction: <name>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,8 +73,19 @@ pub fn parse_logs(logs: &[String], reported_total: u64) -> CuProfile {
                 depth,
                 consumed_cu: None,
                 failed: false,
+                instruction_name: None,
             });
             stack.push(invocations.len() - 1);
+            continue;
+        }
+
+        if let Some(name) = parse_instruction_name_log(line) {
+            if let Some(&top_idx) = stack.last() {
+                // First one wins — later debug logs don't overwrite.
+                if invocations[top_idx].instruction_name.is_none() {
+                    invocations[top_idx].instruction_name = Some(name);
+                }
+            }
             continue;
         }
 
@@ -126,6 +140,15 @@ fn parse_invoke(line: &str) -> Option<(String, u32)> {
     let depth_str = rest.strip_suffix(']')?;
     let depth: u32 = depth_str.parse().ok()?;
     Some((program.to_string(), depth))
+}
+
+fn parse_instruction_name_log(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("Program log: Instruction: ")?;
+    let trimmed = rest.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 fn parse_consumed(line: &str) -> Option<u64> {
@@ -422,5 +445,69 @@ mod tests {
         assert_eq!(profile.summed_top_level, 0);
         assert_eq!(profile.native_overhead_cu, 0);
         assert!(profile.verified);
+    }
+
+    #[test]
+    fn instruction_name_log_is_captured_on_invocation() {
+        let logs = log(
+            "Program AAA invoke [1]
+             Program log: Instruction: Swap
+             Program AAA consumed 5000 of 200000 compute units
+             Program AAA success",
+        );
+        let profile = parse_logs(&logs, 5000);
+        assert_eq!(profile.invocations.len(), 1);
+        assert_eq!(
+            profile.invocations[0].instruction_name.as_deref(),
+            Some("Swap")
+        );
+    }
+
+    #[test]
+    fn first_instruction_log_wins_within_an_invocation() {
+        let logs = log(
+            "Program AAA invoke [1]
+             Program log: Instruction: Swap
+             Program log: Instruction: PostHocNote
+             Program AAA success",
+        );
+        let profile = parse_logs(&logs, 150);
+        assert_eq!(
+            profile.invocations[0].instruction_name.as_deref(),
+            Some("Swap")
+        );
+    }
+
+    #[test]
+    fn nested_invocations_each_get_their_own_instruction_name() {
+        let logs = log(
+            "Program OUTER invoke [1]
+             Program log: Instruction: Route
+             Program INNER invoke [2]
+             Program log: Instruction: Transfer
+             Program INNER success
+             Program OUTER success",
+        );
+        let profile = parse_logs(&logs, 300);
+        assert_eq!(profile.invocations.len(), 2);
+        assert_eq!(
+            profile.invocations[0].instruction_name.as_deref(),
+            Some("Route")
+        );
+        assert_eq!(
+            profile.invocations[1].instruction_name.as_deref(),
+            Some("Transfer")
+        );
+    }
+
+    #[test]
+    fn invocation_without_instruction_log_has_none() {
+        let logs = log(
+            "Program AAA invoke [1]
+             Program log: some debug stuff
+             Program AAA success",
+        );
+        let profile = parse_logs(&logs, 150);
+        assert_eq!(profile.invocations[0].instruction_name, None);
     }
 }

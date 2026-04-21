@@ -10,6 +10,7 @@ Deep-dive documentation for the GulfWatch security monitor. The main [README](..
 | [`classification.md`](classification.md) | How `gulfwatch-ingest::parser` walks raw transactions and labels every instruction (top-level + inner CPIs) with a typed `InstructionKind`. The bridge between raw bytes and pattern-matchable detections. | You're adding support for a new program, debugging why an instruction was classified as `Other`, or trying to understand what the detections actually see. |
 | [`transaction-classification.md`](transaction-classification.md) | How `gulfwatch-classification` derives high-level transaction types (`swap`, `bridge_out`, `nft_send`, etc.), how classifier priority works, and how debug traces are produced. | You're debugging why TUI/API shows a specific tx type, tuning classifier behavior, or adding a new classifier. |
 | [`detections.md`](detections.md) | The three Phase 1 security rules, Authority Change, Failed Tx Cluster, Large Transfer Anomaly, including what each one fires on, why it matters, the alert payload, and what it deliberately doesn't catch. | You're building a UI for alerts, evaluating detection coverage, or planning a new detection rule. |
+| [`idl-loading.md`](idl-loading.md) | How GulfWatch finds and parses program IDLs — the on-chain → runtime-directory → fail fallback chain, supported formats (Anchor 0.29 legacy, Anchor 0.30+, Codama rootNode), three ways to add your own IDL, and how to debug when one isn't loading. | You're monitoring a new program and its instructions show up as opaque types, or you want to drop your own IDL into the project. |
 
 ## Suggested reading order
 
@@ -35,6 +36,8 @@ Deep-dive documentation for the GulfWatch security monitor. The main [README](..
 | Add a fourth detection | [`detections.md` → adding a new detection](detections.md#adding-a-new-detection) |
 | Teach the parser a new program | [`classification.md` → how to add support for a new program](classification.md#how-to-add-support-for-a-new-program) |
 | Debug why a tx is labeled `fallback` or `swap` | [`transaction-classification.md`](transaction-classification.md) |
+| Load your own program's IDL so instructions show readable names | [`idl-loading.md` → adding an IDL](idl-loading.md#adding-an-idl-three-ways) |
+| Debug why a program's sidebar glyph is `·` | [`idl-loading.md` → debugging a missing IDL](idl-loading.md#debugging-a-missing-idl) |
 | Understand the ingest → worker → broadcast loop | [`architecture.md` → the flow in one picture](architecture.md#the-flow-in-one-picture) |
 
 ## What's not in here (yet)

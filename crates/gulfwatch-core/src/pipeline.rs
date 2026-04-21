@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 
 use crate::alert::{AlertEvent, AlertRule};
 use crate::detections::Detection;
-use crate::idl::{AnchorIdl, IdlRegistryEntry, IdlStatus};
+use crate::idl::{IdlDocument, IdlRegistryEntry, IdlStatus};
 use crate::rolling_window::RollingWindow;
 use crate::transaction::{InstructionKind, Transaction};
 
@@ -23,6 +23,7 @@ pub struct AppState {
     pub recent_alerts: Arc<RwLock<VecDeque<AlertEvent>>>,
     pub idls: Arc<RwLock<HashMap<String, IdlRegistryEntry>>>,
     pub idl_status: Arc<RwLock<HashMap<String, IdlStatus>>>,
+    pub idl_failures: Arc<RwLock<HashMap<String, String>>>,
     pub ingest_tx: mpsc::Sender<Transaction>,
     pub window_minutes: i64,
 }
@@ -42,6 +43,7 @@ impl AppState {
             recent_alerts: Arc::new(RwLock::new(VecDeque::new())),
             idls: Arc::new(RwLock::new(HashMap::new())),
             idl_status: Arc::new(RwLock::new(HashMap::new())),
+            idl_failures: Arc::new(RwLock::new(HashMap::new())),
             ingest_tx,
             window_minutes,
         };
@@ -69,11 +71,15 @@ impl AppState {
         windows.remove(program_id);
     }
 
-    pub async fn upsert_idl(&self, program_id: &str, idl: AnchorIdl) {
+    pub async fn upsert_idl(&self, program_id: &str, idl: IdlDocument) {
         let entry = IdlRegistryEntry::from_idl(idl);
         {
             let mut idls = self.idls.write().await;
             idls.insert(program_id.to_string(), entry);
+        }
+        {
+            let mut failures = self.idl_failures.write().await;
+            failures.remove(program_id);
         }
         self.set_idl_status(program_id, IdlStatus::Loaded).await;
     }
@@ -88,7 +94,20 @@ impl AppState {
         statuses.get(program_id).copied()
     }
 
-    pub async fn get_idl(&self, program_id: &str) -> Option<AnchorIdl> {
+    pub async fn set_idl_failure(&self, program_id: &str, reason: impl Into<String>) {
+        {
+            let mut failures = self.idl_failures.write().await;
+            failures.insert(program_id.to_string(), reason.into());
+        }
+        self.set_idl_status(program_id, IdlStatus::Unavailable).await;
+    }
+
+    pub async fn get_idl_failure(&self, program_id: &str) -> Option<String> {
+        let failures = self.idl_failures.read().await;
+        failures.get(program_id).cloned()
+    }
+
+    pub async fn get_idl(&self, program_id: &str) -> Option<IdlDocument> {
         let idls = self.idls.read().await;
         idls.get(program_id).map(|entry| entry.idl.clone())
     }
@@ -176,6 +195,7 @@ pub async fn run_processing_worker(
 
         {
             let idls = handle.idls.read().await;
+
             if !idls.is_empty() {
                 for ix in tx.instructions.iter_mut() {
                     if ix.anchor_name.is_some() {
@@ -185,8 +205,8 @@ pub async fn run_processing_worker(
                         continue;
                     };
                     if let Some(entry) = idls.get(&ix.program_id) {
-                        if let Some(name) = entry.instruction_discriminators.get(&disc) {
-                            ix.anchor_name = Some(name.clone());
+                        if let Some(name) = entry.instruction_name_for(&disc) {
+                            ix.anchor_name = Some(name.to_string());
                         }
                     }
                 }
@@ -209,6 +229,31 @@ pub async fn run_processing_worker(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // IDL names stay authoritative; this only fills instructions that
+            // had no IDL hit. Matches by program_id in execution order, one
+            // log-derived name consumed per instruction.
+            if let Some(cu) = tx.cu_profile.as_ref() {
+                let mut names_by_program: HashMap<&str, VecDeque<&str>> = HashMap::new();
+                for inv in &cu.invocations {
+                    if let Some(name) = inv.instruction_name.as_deref() {
+                        names_by_program
+                            .entry(inv.program_id.as_str())
+                            .or_default()
+                            .push_back(name);
+                    }
+                }
+                for ix in tx.instructions.iter_mut() {
+                    if ix.anchor_name.is_some() {
+                        continue;
+                    }
+                    if let Some(queue) = names_by_program.get_mut(ix.program_id.as_str()) {
+                        if let Some(name) = queue.pop_front() {
+                            ix.anchor_name = Some(name.to_string());
                         }
                     }
                 }
@@ -420,26 +465,16 @@ mod tests {
 
     #[tokio::test]
     async fn worker_resolves_anchor_name_for_matching_discriminator() {
-        use crate::idl::{derive_instruction_discriminator, AnchorIdl, IdlInstruction};
+        use crate::idl::{derive_instruction_discriminator, parse_idl_json};
         use crate::transaction::{InstructionKind, ParsedInstruction};
 
         let (state, ingest_rx) = AppState::new(100, 10);
         state.add_program("JUP6LkbZ".to_string()).await;
 
-        let idl = AnchorIdl {
-            version: Some("0.1.0".to_string()),
-            name: "jupiter".to_string(),
-            instructions: vec![IdlInstruction {
-                name: "route".to_string(),
-                accounts: vec![],
-                args: vec![],
-            }],
-            accounts: vec![],
-            types: vec![],
-            errors: vec![],
-            events: vec![],
-            metadata: None,
-        };
+        let idl = parse_idl_json(
+            br#"{"version":"0.1.0","name":"jupiter","instructions":[{"name":"route"}]}"#,
+        )
+        .unwrap();
         state.upsert_idl("JUP6LkbZ", idl).await;
 
         let route_disc = derive_instruction_discriminator("route");
@@ -450,6 +485,7 @@ mod tests {
                 kind: InstructionKind::Unknown,
                 accounts: vec![],
                 discriminator: Some(route_disc),
+                data: vec![],
                 anchor_name: None,
             },
             ParsedInstruction {
@@ -460,6 +496,7 @@ mod tests {
                 },
                 accounts: vec![],
                 discriminator: None,
+                data: vec![],
                 anchor_name: None,
             },
         ];
@@ -486,21 +523,36 @@ mod tests {
 
     #[tokio::test]
     async fn upsert_idl_flips_status_to_loaded() {
-        use crate::idl::{AnchorIdl, IdlStatus};
+        use crate::idl::{parse_idl_json, IdlStatus};
 
         let (state, _rx) = AppState::new(100, 10);
-        let idl = AnchorIdl {
-            version: None,
-            name: "prog".to_string(),
-            instructions: vec![],
-            accounts: vec![],
-            types: vec![],
-            errors: vec![],
-            events: vec![],
-            metadata: None,
-        };
+        let idl = parse_idl_json(br#"{"name":"prog"}"#).unwrap();
         assert_eq!(state.get_idl_status("prog").await, None);
         state.upsert_idl("prog", idl).await;
+        assert_eq!(state.get_idl_status("prog").await, Some(IdlStatus::Loaded));
+    }
+
+    #[tokio::test]
+    async fn set_idl_failure_marks_unavailable_and_records_reason() {
+        use crate::idl::{parse_idl_json, IdlStatus};
+
+        let (state, _rx) = AppState::new(100, 10);
+        state
+            .set_idl_failure("prog", "missing field `name`")
+            .await;
+        assert_eq!(
+            state.get_idl_status("prog").await,
+            Some(IdlStatus::Unavailable)
+        );
+        assert_eq!(
+            state.get_idl_failure("prog").await.as_deref(),
+            Some("missing field `name`")
+        );
+
+        // A successful upsert must clear the stale failure reason.
+        let idl = parse_idl_json(br#"{"name":"prog"}"#).unwrap();
+        state.upsert_idl("prog", idl).await;
+        assert_eq!(state.get_idl_failure("prog").await, None);
         assert_eq!(state.get_idl_status("prog").await, Some(IdlStatus::Loaded));
     }
 
@@ -522,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn worker_resolves_anchor_error_name_from_failing_instructions_program() {
-        use crate::idl::{AnchorIdl, IdlError};
+        use crate::idl::parse_idl_json;
         use crate::transaction::{InstructionKind, ParsedInstruction};
         use crate::tx_error::TransactionError;
 
@@ -531,22 +583,13 @@ mod tests {
 
         // IDL is registered on the inner program (the one that emits the error),
         // not on the outer tx program_id — this exercises the CPI resolution path.
-        let inner_idl = AnchorIdl {
-            version: None,
-            name: "jupiter_inner".to_string(),
-            instructions: vec![],
-            accounts: vec![],
-            types: vec![],
-            errors: vec![
-                IdlError {
-                    code: 6000,
-                    name: "SlippageToleranceExceeded".to_string(),
-                    msg: Some("The slippage tolerance was exceeded".to_string()),
-                },
-            ],
-            events: vec![],
-            metadata: None,
-        };
+        let inner_idl = parse_idl_json(
+            br#"{
+                "name":"jupiter_inner",
+                "errors":[{"code":6000,"name":"SlippageToleranceExceeded","msg":"The slippage tolerance was exceeded"}]
+            }"#,
+        )
+        .unwrap();
         state.upsert_idl("INNER_PROGRAM", inner_idl).await;
 
         let mut tx = make_tx("JUP6LkbZ", false);
@@ -556,6 +599,7 @@ mod tests {
                 kind: InstructionKind::Unknown,
                 accounts: vec![],
                 discriminator: None,
+                data: vec![],
                 anchor_name: None,
             },
             ParsedInstruction {
@@ -563,6 +607,7 @@ mod tests {
                 kind: InstructionKind::Unknown,
                 accounts: vec![],
                 discriminator: None,
+                data: vec![],
                 anchor_name: None,
             },
         ];
@@ -600,27 +645,17 @@ mod tests {
 
     #[tokio::test]
     async fn worker_leaves_anchor_error_none_when_code_not_in_idl() {
-        use crate::idl::{AnchorIdl, IdlError};
+        use crate::idl::parse_idl_json;
         use crate::transaction::{InstructionKind, ParsedInstruction};
         use crate::tx_error::TransactionError;
 
         let (state, ingest_rx) = AppState::new(100, 10);
         state.add_program("prog".to_string()).await;
 
-        let idl = AnchorIdl {
-            version: None,
-            name: "prog".to_string(),
-            instructions: vec![],
-            accounts: vec![],
-            types: vec![],
-            errors: vec![IdlError {
-                code: 6000,
-                name: "KnownError".to_string(),
-                msg: None,
-            }],
-            events: vec![],
-            metadata: None,
-        };
+        let idl = parse_idl_json(
+            br#"{"name":"prog","errors":[{"code":6000,"name":"KnownError"}]}"#,
+        )
+        .unwrap();
         state.upsert_idl("prog", idl).await;
 
         let mut tx = make_tx("prog", false);
@@ -629,6 +664,7 @@ mod tests {
             kind: InstructionKind::Unknown,
             accounts: vec![],
             discriminator: None,
+            data: vec![],
             anchor_name: None,
         }];
         tx.tx_error = Some(TransactionError {
@@ -675,6 +711,7 @@ mod tests {
             kind: InstructionKind::Unknown,
             accounts: vec![],
             discriminator: Some(derive_instruction_discriminator("swap")),
+            data: vec![],
             anchor_name: None,
         }];
 
@@ -690,6 +727,179 @@ mod tests {
             .unwrap();
 
         assert_eq!(received.instructions[0].anchor_name, None);
+
+        drop(sender);
+        drop(state);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), worker).await;
+    }
+
+    #[tokio::test]
+    async fn log_fallback_names_instructions_when_no_idl_registered() {
+        use crate::cu_attribution::parse_logs;
+        use crate::transaction::{InstructionKind, ParsedInstruction};
+
+        let (state, ingest_rx) = AppState::new(100, 10);
+        state.add_program("RAYDIUM".to_string()).await;
+
+        let logs: Vec<String> = [
+            "Program RAYDIUM invoke [1]",
+            "Program log: Instruction: Swap",
+            "Program RAYDIUM consumed 5000 of 200000 compute units",
+            "Program RAYDIUM success",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let profile = parse_logs(&logs, 5000);
+
+        let mut tx = make_tx("RAYDIUM", true);
+        tx.instructions = vec![ParsedInstruction {
+            program_id: "RAYDIUM".to_string(),
+            kind: InstructionKind::Unknown,
+            accounts: vec![],
+            discriminator: None,
+            data: vec![],
+            anchor_name: None,
+        }];
+        tx.logs = logs;
+        tx.cu_profile = Some(profile);
+
+        let mut rx = state.tx_broadcast.subscribe();
+        let sender = state.ingest_tx.clone();
+        let handle = WorkerHandle::from(&state);
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
+
+        sender.send(tx).await.unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(received.instructions[0].anchor_name.as_deref(), Some("Swap"));
+
+        drop(sender);
+        drop(state);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), worker).await;
+    }
+
+    #[tokio::test]
+    async fn idl_name_wins_over_log_name_when_both_available() {
+        use crate::cu_attribution::parse_logs;
+        use crate::idl::{derive_instruction_discriminator, parse_idl_json};
+        use crate::transaction::{InstructionKind, ParsedInstruction};
+
+        let (state, ingest_rx) = AppState::new(100, 10);
+        state.add_program("JUP".to_string()).await;
+
+        // IDL says "route" (lowercase). Log says "Route" (capitalised).
+        // If IDL precedence is broken, the test would see "Route".
+        let idl = parse_idl_json(br#"{"name":"jupiter","instructions":[{"name":"route"}]}"#)
+            .unwrap();
+        state.upsert_idl("JUP", idl).await;
+
+        let logs: Vec<String> = [
+            "Program JUP invoke [1]",
+            "Program log: Instruction: Route",
+            "Program JUP success",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let profile = parse_logs(&logs, 5000);
+
+        let mut tx = make_tx("JUP", true);
+        tx.instructions = vec![ParsedInstruction {
+            program_id: "JUP".to_string(),
+            kind: InstructionKind::Unknown,
+            accounts: vec![],
+            discriminator: Some(derive_instruction_discriminator("route")),
+            data: vec![],
+            anchor_name: None,
+        }];
+        tx.logs = logs;
+        tx.cu_profile = Some(profile);
+
+        let mut rx = state.tx_broadcast.subscribe();
+        let sender = state.ingest_tx.clone();
+        let handle = WorkerHandle::from(&state);
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
+
+        sender.send(tx).await.unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(received.instructions[0].anchor_name.as_deref(), Some("route"));
+
+        drop(sender);
+        drop(state);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), worker).await;
+    }
+
+    #[tokio::test]
+    async fn log_fallback_only_fills_gaps_leaving_idl_resolved_alone() {
+        use crate::cu_attribution::parse_logs;
+        use crate::idl::{derive_instruction_discriminator, parse_idl_json};
+        use crate::transaction::{InstructionKind, ParsedInstruction};
+
+        let (state, ingest_rx) = AppState::new(100, 10);
+        state.add_program("JUP".to_string()).await;
+
+        let idl = parse_idl_json(br#"{"name":"jupiter","instructions":[{"name":"route"}]}"#)
+            .unwrap();
+        state.upsert_idl("JUP", idl).await;
+
+        // Two instructions: Jupiter (IDL-resolvable) + native Raydium (no IDL).
+        let logs: Vec<String> = [
+            "Program JUP invoke [1]",
+            "Program log: Instruction: Route",
+            "Program JUP success",
+            "Program RAYDIUM invoke [1]",
+            "Program log: Instruction: Swap",
+            "Program RAYDIUM success",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let profile = parse_logs(&logs, 10_000);
+
+        let mut tx = make_tx("JUP", true);
+        tx.instructions = vec![
+            ParsedInstruction {
+                program_id: "JUP".to_string(),
+                kind: InstructionKind::Unknown,
+                accounts: vec![],
+                discriminator: Some(derive_instruction_discriminator("route")),
+                data: vec![],
+                anchor_name: None,
+            },
+            ParsedInstruction {
+                program_id: "RAYDIUM".to_string(),
+                kind: InstructionKind::Unknown,
+                accounts: vec![],
+                discriminator: None,
+                data: vec![],
+                anchor_name: None,
+            },
+        ];
+        tx.logs = logs;
+        tx.cu_profile = Some(profile);
+
+        let mut rx = state.tx_broadcast.subscribe();
+        let sender = state.ingest_tx.clone();
+        let handle = WorkerHandle::from(&state);
+        let worker = tokio::spawn(run_processing_worker(handle, ingest_rx, vec![]));
+
+        sender.send(tx).await.unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // IDL wins for Jupiter (stays lowercase "route"), log fills Raydium.
+        assert_eq!(received.instructions[0].anchor_name.as_deref(), Some("route"));
+        assert_eq!(received.instructions[1].anchor_name.as_deref(), Some("Swap"));
 
         drop(sender);
         drop(state);

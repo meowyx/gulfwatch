@@ -8,7 +8,10 @@ use std::time::Duration;
 
 use app::{App, View};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -111,7 +114,8 @@ async fn main() -> io::Result<()> {
     let mut app = App::new(state);
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // No mouse capture — keeps terminal drag-to-select working for copy/paste.
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -119,8 +123,8 @@ async fn main() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
 
@@ -131,33 +135,63 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
 ) -> io::Result<()> {
+    let mut mouse_capture_on = false;
     loop {
         // Drain any broadcast messages
         app.poll_updates();
+
+        // Sync crossterm's mouse capture with the user-toggled flag.
+        if app.mouse_capture != mouse_capture_on {
+            if app.mouse_capture {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            } else {
+                execute!(io::stdout(), DisableMouseCapture)?;
+            }
+            mouse_capture_on = app.mouse_capture;
+        }
 
         terminal.draw(|f| ui::draw(f, app))?;
 
         // Poll for events with a short timeout so we refresh frequently
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                // Global keys
-                match (key.code, key.modifiers) {
-                    (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                        return Ok(());
+            match event::read()? {
+                Event::Mouse(me) => match me.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        app.click_explain_byte(me.column, me.row);
                     }
+                    MouseEventKind::ScrollUp => app.move_explain_cursor(-1),
+                    MouseEventKind::ScrollDown => app.move_explain_cursor(1),
                     _ => {}
-                }
+                },
+                Event::Key(key) => {
+                    match (key.code, key.modifiers) {
+                        (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                            if mouse_capture_on {
+                                let _ = execute!(io::stdout(), DisableMouseCapture);
+                            }
+                            return Ok(());
+                        }
+                        (KeyCode::Char('M'), _) => app.toggle_mouse_capture(),
+                        _ => {}
+                    }
 
                 // View-specific keys
                 if !matches!(app.view, View::Dashboard) {
-                    // Detail view: Esc or Backspace to go back
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Backspace => app.close_detail(),
-                        KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
-                        KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
-                        KeyCode::Left | KeyCode::Char('h') => app.prev_detail_tab(),
-                        KeyCode::Right | KeyCode::Char('l') => app.next_detail_tab(),
-                        _ => {}
+                    // Shift-HJKL navigates the Explain tab's byte cursor.
+                    // Plain hjkl still scrolls / switches tabs.
+                    match (key.code, key.modifiers) {
+                        (KeyCode::Char('H'), _) => app.move_explain_cursor(-1),
+                        (KeyCode::Char('L'), _) => app.move_explain_cursor(1),
+                        (KeyCode::Char('K'), _) => app.move_explain_cursor(-16),
+                        (KeyCode::Char('J'), _) => app.move_explain_cursor(16),
+                        _ => match key.code {
+                            KeyCode::Esc | KeyCode::Backspace => app.close_detail(),
+                            KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
+                            KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                            KeyCode::Left | KeyCode::Char('h') => app.prev_detail_tab(),
+                            KeyCode::Right | KeyCode::Char('l') => app.next_detail_tab(),
+                            _ => {}
+                        },
                     }
                 } else {
                     // Dashboard view
@@ -175,13 +209,15 @@ async fn run_app(
                         _ => {}
                     }
                 }
+                }
+                _ => {}
             }
         }
     }
 }
 
 fn require_env(key: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| panic!("{key} not set — add it to .env"))
+    std::env::var(key).unwrap_or_else(|_| panic!("{key} not set. Add it to .env"))
 }
 
 fn parse_watched_accounts() -> HashSet<String> {

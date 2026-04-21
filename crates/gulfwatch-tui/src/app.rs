@@ -1,6 +1,9 @@
+use std::cell::Cell;
+
 use gulfwatch_core::alert::AlertEvent;
 use gulfwatch_core::transaction::Transaction;
 use gulfwatch_core::AppState;
+use ratatui::layout::Rect;
 use tokio::sync::broadcast;
 
 pub enum View {
@@ -13,6 +16,7 @@ pub enum View {
 pub enum DetailTab {
     Overview,
     Instructions,
+    Explain,
     CuProfile,
     Logs,
     Accounts,
@@ -21,9 +25,10 @@ pub enum DetailTab {
 }
 
 impl DetailTab {
-    pub const ALL: [DetailTab; 7] = [
+    pub const ALL: [DetailTab; 8] = [
         DetailTab::Overview,
         DetailTab::Instructions,
+        DetailTab::Explain,
         DetailTab::CuProfile,
         DetailTab::Logs,
         DetailTab::Accounts,
@@ -35,6 +40,7 @@ impl DetailTab {
         match self {
             DetailTab::Overview => "Overview",
             DetailTab::Instructions => "Instructions",
+            DetailTab::Explain => "Explain",
             DetailTab::CuProfile => "CU Profile",
             DetailTab::Logs => "Logs",
             DetailTab::Accounts => "Accounts",
@@ -65,6 +71,12 @@ pub struct App {
     pub detail_scroll: u16,
     pub detail_tab: DetailTab,
     pub metrics_scroll: u16,
+    pub explain_cursor: usize,
+    pub mouse_capture: bool,
+    // Written by the Explain render, read by mouse event handling.
+    pub explain_paragraph: Cell<Option<Rect>>,
+    pub explain_hex_start_line: Cell<u16>,
+    pub explain_data_len: Cell<usize>,
 }
 
 pub const PANEL_COUNT: usize = 4;
@@ -93,6 +105,11 @@ impl App {
             detail_scroll: 0,
             detail_tab: DetailTab::Overview,
             metrics_scroll: 0,
+            explain_cursor: 0,
+            mouse_capture: false,
+            explain_paragraph: Cell::new(None),
+            explain_hex_start_line: Cell::new(0),
+            explain_data_len: Cell::new(0),
         }
     }
 
@@ -243,6 +260,7 @@ impl App {
                     self.view = View::TransactionDetail(Box::new(tx));
                     self.detail_scroll = 0;
                     self.detail_tab = DetailTab::Overview;
+                    self.explain_cursor = 0;
                 }
             }
             PANEL_ALERTS => {
@@ -260,6 +278,91 @@ impl App {
         self.view = View::Dashboard;
         self.detail_scroll = 0;
         self.detail_tab = DetailTab::Overview;
+        self.explain_cursor = 0;
+    }
+
+    pub fn explained_instruction_data_len(&self) -> usize {
+        let View::TransactionDetail(tx) = &self.view else {
+            return 0;
+        };
+        tx.instructions
+            .iter()
+            .find(|ix| ix.program_id == tx.program_id && !ix.data.is_empty())
+            .map(|ix| ix.data.len())
+            .unwrap_or(0)
+    }
+
+    pub fn move_explain_cursor(&mut self, delta: isize) {
+        if !matches!(self.view, View::TransactionDetail(_)) || self.detail_tab != DetailTab::Explain
+        {
+            return;
+        }
+        let len = self.explained_instruction_data_len();
+        if len == 0 {
+            return;
+        }
+        let next = (self.explain_cursor as isize).saturating_add(delta);
+        let max = (len - 1) as isize;
+        self.explain_cursor = next.clamp(0, max) as usize;
+    }
+
+    pub fn toggle_mouse_capture(&mut self) {
+        self.mouse_capture = !self.mouse_capture;
+    }
+
+    pub fn click_explain_byte(&mut self, col: u16, row: u16) {
+        if !self.mouse_capture
+            || !matches!(self.view, View::TransactionDetail(_))
+            || self.detail_tab != DetailTab::Explain
+        {
+            return;
+        }
+        let Some(rect) = self.explain_paragraph.get() else {
+            return;
+        };
+        if row < rect.y || row >= rect.y.saturating_add(rect.height) {
+            return;
+        }
+        if col < rect.x || col >= rect.x.saturating_add(rect.width) {
+            return;
+        }
+        let visual_row_offset = row - rect.y;
+        let logical_line = self.detail_scroll.saturating_add(visual_row_offset);
+        let hex_start = self.explain_hex_start_line.get();
+        if logical_line < hex_start {
+            return;
+        }
+        let row_in_dump = (logical_line - hex_start) as usize;
+        let data_len = self.explain_data_len.get();
+        if data_len == 0 {
+            return;
+        }
+        let total_rows = (data_len + 15) / 16;
+        if row_in_dump >= total_rows {
+            return;
+        }
+        let col_in_paragraph = col - rect.x;
+        // Gutter takes cols 0..8 ("  XXXX  ").
+        if col_in_paragraph < 8 {
+            return;
+        }
+        let col_in_bytes = (col_in_paragraph - 8) as usize;
+        // Byte 0..7 occupy 3 cols each; col 24 is the mid-row extra space;
+        // bytes 8..15 start at col 25 and occupy 3 cols each.
+        let byte_in_row = if col_in_bytes < 24 {
+            col_in_bytes / 3
+        } else if col_in_bytes == 24 {
+            return;
+        } else {
+            (col_in_bytes - 1) / 3
+        };
+        if byte_in_row >= 16 {
+            return;
+        }
+        let byte_idx = row_in_dump * 16 + byte_in_row;
+        if byte_idx < data_len {
+            self.explain_cursor = byte_idx;
+        }
     }
 
     pub fn next_detail_tab(&mut self) {
@@ -410,6 +513,7 @@ mod tests {
         assert_eq!(app.detail_tab, DetailTab::Overview);
         for expected in [
             DetailTab::Instructions,
+            DetailTab::Explain,
             DetailTab::CuProfile,
             DetailTab::Logs,
             DetailTab::Accounts,
@@ -456,7 +560,7 @@ mod tests {
         app.open_detail();
         app.next_detail_tab();
         app.next_detail_tab();
-        assert_eq!(app.detail_tab, DetailTab::CuProfile);
+        assert_eq!(app.detail_tab, DetailTab::Explain);
 
         app.close_detail();
         assert_eq!(app.detail_tab, DetailTab::Overview);
