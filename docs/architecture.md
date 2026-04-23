@@ -111,7 +111,7 @@ Lives at `crates/gulfwatch-tui/`. A Ratatui terminal app. **Standalone**: runs i
 Run with:
 
 ```bash
-cargo run -p gulfwatch-tui
+cargo run -p gulfwatch
 ```
 
 The TUI and the server share `gulfwatch-core` and `gulfwatch-ingest` as library dependencies, so they can never drift in their understanding of "what is a transaction" or "what does Authority Change detection do."
@@ -152,7 +152,7 @@ The total Rust code for all three Phase 1 detections is under 200 lines because 
 
 ### Two binaries, not one.
 
-The server runs as a service behind the Next.js dashboard, typically one instance per protocol team. The TUI runs locally on a developer's laptop and is self-contained: no server, no setup, just `cargo run -p gulfwatch-tui`. Both binaries share the same core and ingest crates, so they can't drift in their detection logic or their understanding of a transaction. Different deployment models, identical brain.
+The server runs as a service behind the Next.js dashboard, typically one instance per protocol team. The TUI runs locally on a developer's laptop and is self-contained: no server, no setup, just `cargo run -p gulfwatch`. Both binaries share the same core and ingest crates, so they can't drift in their detection logic or their understanding of a transaction. Different deployment models, identical brain.
 
 ### Ingest is its own crate so the core has zero I/O.
 

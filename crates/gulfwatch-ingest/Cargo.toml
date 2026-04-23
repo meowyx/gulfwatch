@@ -2,6 +2,10 @@
 name = "gulfwatch-ingest"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Solana WebSocket ingest pipeline and IDL registry for GulfWatch."
+repository = "https://github.com/meowyx/gulfwatch"
+readme = "../../README.md"
 
 [dependencies]
 base64 = "0.22.1"
@@ -10,6 +14,7 @@ chrono = { version = "0.4.44", features = ["serde"] }
 curve25519-dalek = "4"
 futures-util = "0.3.32"
 gulfwatch-core = { version = "0.1.0", path = "../gulfwatch-core" }
+include_dir = "0.7"
 native-tls = "0.2.18"
 reqwest = { version = "0.13.2", features = ["json"] }
 serde = { version = "1.0.228", features = ["derive"] }

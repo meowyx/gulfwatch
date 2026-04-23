@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod ui;
 
 use std::collections::HashSet;
@@ -29,7 +30,7 @@ use ratatui::prelude::*;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    load_dotenv();
+    config::init();
 
     let (state, ingest_rx) = AppState::new(1024, parse_rolling_window_minutes());
 
@@ -217,7 +218,9 @@ async fn run_app(
 }
 
 fn require_env(key: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| panic!("{key} not set. Add it to .env"))
+    std::env::var(key).unwrap_or_else(|_| {
+        panic!("{key} not set. Edit your gulfwatch config or set the env var.")
+    })
 }
 
 fn parse_watched_accounts() -> HashSet<String> {
@@ -257,29 +260,3 @@ fn parse_correlation_window_secs() -> u64 {
         .unwrap_or(300)
 }
 
-fn load_dotenv() {
-    let mut dir = std::env::current_dir().ok();
-    while let Some(d) = dir {
-        let env_file = d.join(".env");
-        if env_file.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&env_file) {
-                for line in contents.lines() {
-                    let line = line.trim();
-                    if line.is_empty() || line.starts_with('#') {
-                        continue;
-                    }
-                    if let Some((key, value)) = line.split_once('=') {
-                        let key = key.trim();
-                        let value = value.trim().trim_matches('"').trim_matches('\'');
-                        if std::env::var(key).is_err() {
-                            // SAFETY: called before any threads are spawned
-                            unsafe { std::env::set_var(key, value); }
-                        }
-                    }
-                }
-            }
-            break;
-        }
-        dir = d.parent().map(|p| p.to_path_buf());
-    }
-}

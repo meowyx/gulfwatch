@@ -2,6 +2,10 @@
 name = "gulfwatch-classification"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Transaction classification rules used by GulfWatch."
+repository = "https://github.com/meowyx/gulfwatch"
+readme = "../../README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

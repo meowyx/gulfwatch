@@ -2,6 +2,10 @@
 name = "gulfwatch-server"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "HTTP, WebSocket, and Prometheus surface for GulfWatch."
+repository = "https://github.com/meowyx/gulfwatch"
+readme = "../../README.md"
 
 [dependencies]
 axum = { version = "0.8.8", features = ["json", "ws"] }
