@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="logo.png" alt="GulfWatch logo" width="128" />
+<img src="gulfwatch-logo.png" alt="GulfWatch logo" width="128" />
 
 # GulfWatch
 
