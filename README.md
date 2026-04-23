@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="logo.png" alt="GulfWatch logo" width="128" />
+
 # GulfWatch
 
 ### The runtime intelligence layer for Solana
