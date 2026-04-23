@@ -10,9 +10,10 @@
 
 Monitor live program behavior, inspect transactions deeply, profile runtime performance, and detect suspicious activity in a TUI to monitor, or through Claude Code (or any MCP-compatible agent) querying the same live data.
 
+[![Crates.io](https://img.shields.io/badge/crates.io-v0.1.0-orange?logo=rust&logoColor=white)](https://crates.io/crates/gulfwatch)
 [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Solana](https://img.shields.io/badge/solana-9945FF?logo=solana&logoColor=white)](https://solana.com/)
-[![Tests](https://img.shields.io/badge/tests-183%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-250%20passing-brightgreen)]()
 [![Status](https://img.shields.io/badge/status-pre--alpha-yellow)]()
 [![Colosseum](https://img.shields.io/badge/colosseum-hackathon-blueviolet)](https://www.colosseum.org/)
 
@@ -27,13 +28,13 @@ GulfWatch helps developers, protocol teams, and agent workflows understand what 
 ## 🚀 Quickstart
 
 ```bash
-git clone https://github.com/meowyx/gulfwatch.git
-cd gulfwatch
-cp .env.example .env        # then fill in SOLANA_WS_URL, SOLANA_RPC_URL, MONITOR_PROGRAMS
-cargo run -p gulfwatch  # TUI + embedded HTTP/WS/Prometheus surface, all in one
+cargo install gulfwatch   # builds + installs the `gulfwatch` binary
+gulfwatch                 # first run writes a config template, edit it, then re-run
 ```
 
-Once the TUI starts running, then live transactions start streaming into the Programs sidebar. Press arrow keys to filter to a monitored program, `Tab` to cycle panels, `Enter` on a transaction for the detail view.
+The first run drops a template at `~/Library/Application Support/gulfwatch/config.toml` (macOS) or `~/.config/gulfwatch/config.toml` (Linux). Fill in your Solana RPC URLs and the programs you want to monitor, save, then re-run `gulfwatch`.
+
+Once the TUI starts, live transactions stream into the Programs sidebar. Press arrow keys to filter to a monitored program, `Tab` to cycle panels, `Enter` on a transaction for the detail view.
 
 ## 🧭 The Problem
 
@@ -313,9 +314,22 @@ Deep-dive docs live in [`docs/`](docs/). Start with [`docs/README.md`](docs/READ
 | [`docs/transaction-classification.md`](docs/transaction-classification.md) | You're debugging why a tx is labeled `swap` / `fallback`, tuning classifier behavior, or adding a classifier |
 | [`docs/detections.md`](docs/detections.md) | You're rendering alerts in a UI, evaluating detection coverage, or planning a new detection rule |
 
+## 🤝 Contributing
+
+Want to hack on GulfWatch itself? Build from source:
+
+```bash
+git clone https://github.com/meowyx/gulfwatch.git
+cd gulfwatch
+cp .env.example .env        # fill in SOLANA_WS_URL, SOLANA_RPC_URL, MONITOR_PROGRAMS
+cargo run -p gulfwatch
+```
+
+PRs welcome. Run `cargo test --workspace` before opening one.
+
 ## 📄 License
 
-License TBD - will be finalized pre-submission. Likely MIT or Apache-2.0 but lets see.
+MIT. See [`LICENSE`](LICENSE) for the full text.
 
 ---
 

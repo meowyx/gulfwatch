@@ -16,3 +16,6 @@ plan.md
 # Scratch space for research, sample fetches, throwaway experiments.
 # The whole directory is ignored — create it ad-hoc when needed.
 tmp/
+
+# Private handoff notes, never pushed.
+handoff/
