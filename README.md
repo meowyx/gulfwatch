@@ -315,7 +315,7 @@ Deep-dive docs live in [`docs/`](docs/). Start with [`docs/README.md`](docs/READ
 
 ## 📄 License
 
-License TBD - will be finalized pre-submission. Likely MIT or Apache-2.0.
+License TBD - will be finalized pre-submission. Likely MIT or Apache-2.0 but lets see.
 
 ---
 
