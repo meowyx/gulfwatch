@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "GulfWatch — runtime intelligence for Solana",
+  title: "GulfWatch - a runtime intelligence for Solana",
   description:
     "Terminal-first observability for Solana. One ingest feeds a keyboard-driven TUI and an MCP server; humans and agents see the same truth.",
 };

@@ -10,6 +10,9 @@
 
 Monitor live program behavior, inspect transactions deeply, profile runtime performance, and detect suspicious activity in a TUI to monitor, or through Claude Code (or any MCP-compatible agent) querying the same live data.
 
+**🌐 [gulfwatch.dev](https://www.gulfwatch.dev/)** · **📦 [crates.io](https://crates.io/crates/gulfwatch)**
+
+[![Website](https://img.shields.io/badge/website-gulfwatch.dev-b8e28a)](https://www.gulfwatch.dev/)
 [![Crates.io](https://img.shields.io/badge/crates.io-v0.1.0-orange?logo=rust&logoColor=white)](https://crates.io/crates/gulfwatch)
 [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Solana](https://img.shields.io/badge/solana-9945FF?logo=solana&logoColor=white)](https://solana.com/)
