@@ -2,6 +2,10 @@
 name = "gulfwatch-mcp"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "MCP server exposing GulfWatch runtime data to AI agents (Claude Code and other MCP clients)."
+repository = "https://github.com/meowyx/gulfwatch"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.102"

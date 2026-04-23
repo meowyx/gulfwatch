@@ -2,12 +2,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gulfwatch_core::{parse_idl_json, IdlDocument};
+use include_dir::{include_dir, Dir};
 use tracing::{debug, warn};
 
-// Repo-relative seed directory, baked at compile time.
-pub fn default_idl_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("idls")
-}
+static EMBEDDED_IDLS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/idls");
 
 pub fn user_idl_dir() -> Option<PathBuf> {
     std::env::var("GULFWATCH_IDL_DIR").ok().map(PathBuf::from)
@@ -73,10 +71,44 @@ pub fn scan_idl_directory(dir: &Path) -> Vec<ScannedIdl> {
     out
 }
 
-// User dir overrides seed on program_id collisions.
+pub fn scan_embedded_idls() -> Vec<ScannedIdl> {
+    let mut out = Vec::new();
+    for file in EMBEDDED_IDLS.files() {
+        let path = file.path().to_path_buf();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let idl = match parse_idl_json(file.contents()) {
+            Ok(i) => i,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "failed to parse embedded IDL");
+                continue;
+            }
+        };
+        let filename_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string());
+        let program_id = match idl.address.clone().or(filename_stem) {
+            Some(pid) => pid,
+            None => {
+                warn!(path = %path.display(), "embedded IDL has no address and no usable filename stem");
+                continue;
+            }
+        };
+        out.push(ScannedIdl {
+            program_id,
+            idl,
+            source_path: path,
+        });
+    }
+    out
+}
+
+// User dir overrides embedded seeds on program_id collisions.
 pub fn load_idl_registry() -> HashMap<String, IdlDocument> {
     let mut map: HashMap<String, IdlDocument> = HashMap::new();
-    for s in scan_idl_directory(&default_idl_dir()) {
+    for s in scan_embedded_idls() {
         map.insert(s.program_id, s.idl);
     }
     if let Some(user) = user_idl_dir() {
@@ -191,17 +223,17 @@ mod tests {
     }
 
     #[test]
-    fn seed_dir_scan_finds_token2022_and_spl_token() {
-        let out = scan_idl_directory(&default_idl_dir());
+    fn embedded_idls_include_token2022_and_spl_token() {
+        let out = scan_embedded_idls();
         let ids: std::collections::HashSet<&str> =
             out.iter().map(|s| s.program_id.as_str()).collect();
         assert!(
             ids.contains("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
-            "seed dir should expose Token-2022, got {ids:?}"
+            "embedded IDLs should expose Token-2022, got {ids:?}"
         );
         assert!(
             ids.contains("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-            "seed dir should expose SPL Token, got {ids:?}"
+            "embedded IDLs should expose SPL Token, got {ids:?}"
         );
     }
 }

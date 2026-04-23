@@ -50,7 +50,7 @@ Restart Claude Code (full quit + relaunch — no hot reload for stdio servers). 
 
 A running GulfWatch instance reachable at `GULFWATCH_BASE_URL` (default `http://localhost:3001`). Either:
 
-- `cargo run -p gulfwatch-tui` — TUI with the HTTP surface embedded. Recommended: one process, you also get the visual dashboard.
+- `cargo run -p gulfwatch` — TUI with the HTTP surface embedded. Recommended: one process, you also get the visual dashboard.
 - `cargo run -p gulfwatch-server` — headless. Useful if you don't want a TUI taking over a terminal.
 
 ## Demo flow

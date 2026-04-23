@@ -1,14 +1,27 @@
 [package]
-name = "gulfwatch-tui"
+name = "gulfwatch"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Runtime intelligence for Solana: TUI + embedded HTTP/MCP server for live transaction monitoring, CU profiling, and security detection."
+repository = "https://github.com/meowyx/gulfwatch"
+homepage = "https://github.com/meowyx/gulfwatch"
+readme = "../../README.md"
+keywords = ["solana", "tui", "observability", "mcp", "blockchain"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "gulfwatch"
+path = "src/main.rs"
 
 [dependencies]
 chrono = { version = "0.4.44", features = ["serde"] }
 crossterm = "0.29.0"
+directories = "6.0"
 gulfwatch-core = { version = "0.1.0", path = "../gulfwatch-core" }
 gulfwatch-ingest = { version = "0.1.0", path = "../gulfwatch-ingest" }
 gulfwatch-server = { version = "0.1.0", path = "../gulfwatch-server" }
 ratatui = "0.30.0"
 serde_json = "1.0.149"
 tokio = { version = "1.51.0", features = ["full"] }
+toml = "1.1"

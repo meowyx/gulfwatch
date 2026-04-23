@@ -2,6 +2,10 @@
 name = "gulfwatch-core"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Core types, detections, and alert engine for GulfWatch."
+repository = "https://github.com/meowyx/gulfwatch"
+readme = "../../README.md"
 
 [dependencies]
 bs58 = "0.5.1"

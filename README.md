@@ -30,7 +30,7 @@ GulfWatch helps developers, protocol teams, and agent workflows understand what 
 git clone https://github.com/meowyx/gulfwatch.git
 cd gulfwatch
 cp .env.example .env        # then fill in SOLANA_WS_URL, SOLANA_RPC_URL, MONITOR_PROGRAMS
-cargo run -p gulfwatch-tui  # TUI + embedded HTTP/WS/Prometheus surface, all in one
+cargo run -p gulfwatch  # TUI + embedded HTTP/WS/Prometheus surface, all in one
 ```
 
 Once the TUI starts running, then live transactions start streaming into the Programs sidebar. Press arrow keys to filter to a monitored program, `Tab` to cycle panels, `Enter` on a transaction for the detail view.
@@ -110,7 +110,7 @@ Setup is two commands and a Claude Code restart — see [Claude Code MCP](#-clau
 
 ### Shared platform
 
-- ✓ **One process for both surfaces** : the TUI binary embeds the full HTTP/WS/Prometheus stack alongside the ratatui UI, so `cargo run -p gulfwatch-tui` is sufficient for the human + agent surfaces. Standalone `gulfwatch-server` binary still available for headless deploys.
+- ✓ **One process for both surfaces** : the TUI binary embeds the full HTTP/WS/Prometheus stack alongside the ratatui UI, so `cargo run -p gulfwatch` is sufficient for the human + agent surfaces. Standalone `gulfwatch-server` binary still available for headless deploys.
 - ✓ **Multi-program monitoring** : watch Raydium, Jupiter, Token 2022, and your own programs in parallel with a single config
 - ✓ **Programs sidebar in the TUI** : live per-program tx counts, alert flags, and keyboard filtering across Transactions / Metrics / Alerts panels
 - ✓ **Rolling window metrics** (error rate, tx volume, compute units, instruction breakdown) computed per program
@@ -161,7 +161,7 @@ Without these two vars, the large-transfer detection is silently inert. The othe
 Self-contained : connects directly to Solana. Also embeds the full HTTP/WebSocket surface (port `LISTEN_ADDR`, default `0.0.0.0:3001`) so the MCP server, the Prometheus endpoint, and any web client can talk to the same in-memory state. One process, one ingest, every surface live. Supports multi-program monitoring via `MONITOR_PROGRAMS` (comma-separated) in `.env`.
 
 ```bash
-cargo run -p gulfwatch-tui
+cargo run -p gulfwatch
 ```
 
 **Layout:** four panels - **Programs** (left sidebar with per-program tx counts, alert flags, and IDL status glyph: `✓` loaded, `⋯` discovery in flight, `·` no IDL — with a short reason rendered in yellow below the row, e.g. `idl: not published`), **Transactions**, **Metrics**, **Alerts**. Mouse drag-to-select works in any view for copying signatures / addresses / log lines out of the TUI.
@@ -202,7 +202,7 @@ cargo run -p gulfwatch-tui
 
 ### Server (REST API + WebSocket) — headless mode
 
-The TUI binary already embeds the full HTTP/WebSocket/Prometheus surface, so most users only need `cargo run -p gulfwatch-tui`. The standalone `gulfwatch-server` binary exists for headless deployments (no terminal UI, just the HTTP surface — useful for servers or containers). Optionally set `LISTEN_ADDR` (defaults to `0.0.0.0:3001`).
+The TUI binary already embeds the full HTTP/WebSocket/Prometheus surface, so most users only need `cargo run -p gulfwatch`. The standalone `gulfwatch-server` binary exists for headless deployments (no terminal UI, just the HTTP surface — useful for servers or containers). Optionally set `LISTEN_ADDR` (defaults to `0.0.0.0:3001`).
 
 ```bash
 cargo run -p gulfwatch-server
@@ -300,7 +300,7 @@ claude mcp add --scope user \
   gulfwatch -- /absolute/path/to/gulfwatch/target/release/gulfwatch-mcp
 ```
 
-Or commit a project-scoped `.mcp.json` at the repo root so anyone who clones gulfwatch gets the MCP wiring for free. Restart Claude Code (full quit + relaunch), then `/mcp` in a new session shows `gulfwatch` connected. With the TUI running (`cargo run -p gulfwatch-tui` — that's all you need; it embeds the HTTP surface) you can then ask things like *"look up signature X and tell me why it failed"* or *"what alerts fired on raydium in the last hour"* and Claude pulls real data from your rolling window. Full setup + tool reference in [`crates/gulfwatch-mcp/README.md`](crates/gulfwatch-mcp/README.md).
+Or commit a project-scoped `.mcp.json` at the repo root so anyone who clones gulfwatch gets the MCP wiring for free. Restart Claude Code (full quit + relaunch), then `/mcp` in a new session shows `gulfwatch` connected. With the TUI running (`cargo run -p gulfwatch` — that's all you need; it embeds the HTTP surface) you can then ask things like *"look up signature X and tell me why it failed"* or *"what alerts fired on raydium in the last hour"* and Claude pulls real data from your rolling window. Full setup + tool reference in [`crates/gulfwatch-mcp/README.md`](crates/gulfwatch-mcp/README.md).
 
 ## 📚 Documentation
 
