@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod init_wizard;
 mod ui;
 
 use std::collections::HashSet;
