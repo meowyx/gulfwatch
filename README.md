@@ -13,7 +13,7 @@ Monitor live program behavior, inspect transactions deeply, profile runtime perf
 **🌐 [gulfwatch.dev](https://www.gulfwatch.dev/)** · **📦 [crates.io](https://crates.io/crates/gulfwatch)**
 
 [![Website](https://img.shields.io/badge/website-gulfwatch.dev-b8e28a)](https://www.gulfwatch.dev/)
-[![Crates.io](https://img.shields.io/badge/crates.io-v0.1.0-orange?logo=rust&logoColor=white)](https://crates.io/crates/gulfwatch)
+[![Crates.io](https://img.shields.io/badge/crates.io-v0.1.1-orange?logo=rust&logoColor=white)](https://crates.io/crates/gulfwatch)
 [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Solana](https://img.shields.io/badge/solana-9945FF?logo=solana&logoColor=white)](https://solana.com/)
 [![Tests](https://img.shields.io/badge/tests-250%20passing-brightgreen)]()
@@ -32,10 +32,10 @@ GulfWatch helps developers, protocol teams, and agent workflows understand what 
 
 ```bash
 cargo install gulfwatch   # builds + installs the `gulfwatch` binary
-gulfwatch                 # first run writes a config template, edit it, then re-run
+gulfwatch                 # first run launches an interactive setup wizard
 ```
 
-The first run drops a template at `~/Library/Application Support/gulfwatch/config.toml` (macOS) or `~/.config/gulfwatch/config.toml` (Linux). Fill in your Solana RPC URLs and the programs you want to monitor, save, then re-run `gulfwatch`.
+The first run launches a colored setup wizard: pick the directory to install into (current dir or a new subdirectory), paste your Solana WebSocket and RPC URLs (from Helius, Quicknode, Triton, or any provider), and GulfWatch writes a fully-commented `gulfwatch.toml` for you. Inside a git repo it also adds that file to `.gitignore` since it holds your RPC keys. Re-run `gulfwatch` from that directory to launch the TUI.
 
 Once the TUI starts, live transactions stream into the Programs sidebar. Press arrow keys to filter to a monitored program, `Tab` to cycle panels, `Enter` on a transaction for the detail view.
 
