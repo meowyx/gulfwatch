@@ -4,7 +4,7 @@ use std::sync::Arc;
 use gulfwatch_classification::{
     ClassificationContext, ClassificationService, InstructionInput, InstructionInputKind,
 };
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing::{error, info, warn};
 
 use crate::alert::{AlertEvent, AlertRule};
@@ -29,7 +29,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(channel_capacity: usize, window_minutes: i64) -> (Self, mpsc::Receiver<Transaction>) {
+    pub fn new(
+        channel_capacity: usize,
+        window_minutes: i64,
+    ) -> (Self, mpsc::Receiver<Transaction>) {
         let (ingest_tx, ingest_rx) = mpsc::channel(channel_capacity);
         let (tx_broadcast, _) = broadcast::channel(channel_capacity);
         let (alert_broadcast, _) = broadcast::channel(channel_capacity);
@@ -99,7 +102,8 @@ impl AppState {
             let mut failures = self.idl_failures.write().await;
             failures.insert(program_id.to_string(), reason.into());
         }
-        self.set_idl_status(program_id, IdlStatus::Unavailable).await;
+        self.set_idl_status(program_id, IdlStatus::Unavailable)
+            .await;
     }
 
     pub async fn get_idl_failure(&self, program_id: &str) -> Option<String> {
@@ -311,7 +315,9 @@ fn to_classification_instructions(tx: &Transaction) -> Vec<InstructionInput> {
                 InstructionKind::SetAuthority { .. } => InstructionInputKind::SetAuthority,
                 InstructionKind::Upgrade => InstructionInputKind::Upgrade,
                 InstructionKind::SystemTransfer { lamports } => {
-                    InstructionInputKind::SystemTransfer { lamports: *lamports }
+                    InstructionInputKind::SystemTransfer {
+                        lamports: *lamports,
+                    }
                 }
                 InstructionKind::TokenTransfer { amount } => {
                     InstructionInputKind::TokenTransfer { amount: *amount }
@@ -439,21 +445,15 @@ mod tests {
 
         sender.send(make_tx("prog", true)).await.unwrap();
 
-        let received1 = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx1.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let received1 = tokio::time::timeout(std::time::Duration::from_millis(100), rx1.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
-        let received2 = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx2.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let received2 = tokio::time::timeout(std::time::Duration::from_millis(100), rx2.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(received1.program_id, "prog");
         assert_eq!(received2.program_id, "prog");
@@ -512,7 +512,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(received.instructions[0].anchor_name.as_deref(), Some("route"));
+        assert_eq!(
+            received.instructions[0].anchor_name.as_deref(),
+            Some("route")
+        );
         assert_eq!(received.instructions[1].anchor_name, None);
         assert_eq!(received.instruction_type.as_deref(), Some("route"));
 
@@ -523,7 +526,7 @@ mod tests {
 
     #[tokio::test]
     async fn upsert_idl_flips_status_to_loaded() {
-        use crate::idl::{parse_idl_json, IdlStatus};
+        use crate::idl::{IdlStatus, parse_idl_json};
 
         let (state, _rx) = AppState::new(100, 10);
         let idl = parse_idl_json(br#"{"name":"prog"}"#).unwrap();
@@ -534,12 +537,10 @@ mod tests {
 
     #[tokio::test]
     async fn set_idl_failure_marks_unavailable_and_records_reason() {
-        use crate::idl::{parse_idl_json, IdlStatus};
+        use crate::idl::{IdlStatus, parse_idl_json};
 
         let (state, _rx) = AppState::new(100, 10);
-        state
-            .set_idl_failure("prog", "missing field `name`")
-            .await;
+        state.set_idl_failure("prog", "missing field `name`").await;
         assert_eq!(
             state.get_idl_status("prog").await,
             Some(IdlStatus::Unavailable)
@@ -563,9 +564,7 @@ mod tests {
         let (state, _rx) = AppState::new(100, 10);
         state.set_idl_status("prog", IdlStatus::Loading).await;
         assert_eq!(state.get_idl_status("prog").await, Some(IdlStatus::Loading));
-        state
-            .set_idl_status("prog", IdlStatus::Unavailable)
-            .await;
+        state.set_idl_status("prog", IdlStatus::Unavailable).await;
         assert_eq!(
             state.get_idl_status("prog").await,
             Some(IdlStatus::Unavailable)
@@ -632,7 +631,10 @@ mod tests {
             .unwrap();
 
         let err = received.tx_error.unwrap();
-        assert_eq!(err.anchor_error_name.as_deref(), Some("SlippageToleranceExceeded"));
+        assert_eq!(
+            err.anchor_error_name.as_deref(),
+            Some("SlippageToleranceExceeded")
+        );
         assert_eq!(
             err.anchor_error_msg.as_deref(),
             Some("The slippage tolerance was exceeded"),
@@ -652,10 +654,9 @@ mod tests {
         let (state, ingest_rx) = AppState::new(100, 10);
         state.add_program("prog".to_string()).await;
 
-        let idl = parse_idl_json(
-            br#"{"name":"prog","errors":[{"code":6000,"name":"KnownError"}]}"#,
-        )
-        .unwrap();
+        let idl =
+            parse_idl_json(br#"{"name":"prog","errors":[{"code":6000,"name":"KnownError"}]}"#)
+                .unwrap();
         state.upsert_idl("prog", idl).await;
 
         let mut tx = make_tx("prog", false);
@@ -775,7 +776,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(received.instructions[0].anchor_name.as_deref(), Some("Swap"));
+        assert_eq!(
+            received.instructions[0].anchor_name.as_deref(),
+            Some("Swap")
+        );
 
         drop(sender);
         drop(state);
@@ -793,8 +797,8 @@ mod tests {
 
         // IDL says "route" (lowercase). Log says "Route" (capitalised).
         // If IDL precedence is broken, the test would see "Route".
-        let idl = parse_idl_json(br#"{"name":"jupiter","instructions":[{"name":"route"}]}"#)
-            .unwrap();
+        let idl =
+            parse_idl_json(br#"{"name":"jupiter","instructions":[{"name":"route"}]}"#).unwrap();
         state.upsert_idl("JUP", idl).await;
 
         let logs: Vec<String> = [
@@ -830,7 +834,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(received.instructions[0].anchor_name.as_deref(), Some("route"));
+        assert_eq!(
+            received.instructions[0].anchor_name.as_deref(),
+            Some("route")
+        );
 
         drop(sender);
         drop(state);
@@ -846,8 +853,8 @@ mod tests {
         let (state, ingest_rx) = AppState::new(100, 10);
         state.add_program("JUP".to_string()).await;
 
-        let idl = parse_idl_json(br#"{"name":"jupiter","instructions":[{"name":"route"}]}"#)
-            .unwrap();
+        let idl =
+            parse_idl_json(br#"{"name":"jupiter","instructions":[{"name":"route"}]}"#).unwrap();
         state.upsert_idl("JUP", idl).await;
 
         // Two instructions: Jupiter (IDL-resolvable) + native Raydium (no IDL).
@@ -898,8 +905,14 @@ mod tests {
             .unwrap();
 
         // IDL wins for Jupiter (stays lowercase "route"), log fills Raydium.
-        assert_eq!(received.instructions[0].anchor_name.as_deref(), Some("route"));
-        assert_eq!(received.instructions[1].anchor_name.as_deref(), Some("Swap"));
+        assert_eq!(
+            received.instructions[0].anchor_name.as_deref(),
+            Some("route")
+        );
+        assert_eq!(
+            received.instructions[1].anchor_name.as_deref(),
+            Some("Swap")
+        );
 
         drop(sender);
         drop(state);
